@@ -11,10 +11,15 @@ public record RegisterCreatorRequest(
         @NotNull String email,
         String address,
         String aadhaarRef,
+        String kycProviderRef,
+        boolean hibpCheckResult,
+        int entropyBits,
         @NotNull String publicKeyPem,
+        @NotNull String keyFingerprint,
         @NotNull String encryptedPrivkeyB64,
         @NotNull String nonceB64,
         @NotNull String authTagB64,
         @NotNull String saltHex,
+        int schemaVersion,
         int inactivityTriggerMonths
 ) {}

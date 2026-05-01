@@ -1,6 +1,5 @@
 package in.deathtrap.common.types.dto;
 
-import in.deathtrap.common.types.enums.OtpChannel;
 import in.deathtrap.common.types.enums.OtpPurpose;
 import jakarta.validation.constraints.NotNull;
 
@@ -8,6 +7,5 @@ import jakarta.validation.constraints.NotNull;
 public record SendOtpRequest(
         String mobile,
         String email,
-        @NotNull OtpChannel channel,
         @NotNull OtpPurpose purpose
 ) {}

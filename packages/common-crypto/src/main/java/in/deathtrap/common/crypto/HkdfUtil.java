@@ -49,7 +49,9 @@ public final class HkdfUtil {
             mac.init(new SecretKeySpec(prk, HMAC_SHA256));
             for (int i = 1; i <= n; i++) {
                 mac.update(t);
-                if (info != null) { mac.update(info); }
+                if (info != null) {
+                    mac.update(info);
+                }
                 mac.update((byte) i);
                 t = mac.doFinal();
                 System.arraycopy(t, 0, okm, (i - 1) * HASH_LEN, HASH_LEN);

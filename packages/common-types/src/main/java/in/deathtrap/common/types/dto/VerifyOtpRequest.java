@@ -6,6 +6,7 @@ import jakarta.validation.constraints.NotNull;
 /** Request body for POST /auth/otp/verify. */
 public record VerifyOtpRequest(
         @NotNull String partyId,
-        @NotNull OtpPurpose purpose,
-        @NotNull String otp
+        @NotNull String mobileOtp,
+        @NotNull String emailOtp,
+        @NotNull OtpPurpose purpose
 ) {}

@@ -26,7 +26,7 @@ public class LogoutHandler {
     private static final Logger log = LoggerFactory.getLogger(LogoutHandler.class);
 
     private static final String UPDATE_SESSION_REVOKED =
-            "UPDATE sessions SET revoked_at = NOW() WHERE session_id = ?";
+            "UPDATE sessions SET revoked_at = NOW() WHERE session_id = ? AND revoked_at IS NULL";
     private static final String INSERT_REVOKED_TOKEN =
             "INSERT INTO revoked_tokens (jti, revoked_at, expires_at) VALUES (?, NOW(), ?) ON CONFLICT (jti) DO NOTHING";
 
@@ -53,7 +53,10 @@ public class LogoutHandler {
         JwtPayload payload = jwtService.validateToken(token);
 
         Instant tokenExpiry = Instant.ofEpochSecond(payload.exp());
-        dbClient.execute(UPDATE_SESSION_REVOKED, payload.jti());
+        int affected = dbClient.execute(UPDATE_SESSION_REVOKED, payload.jti());
+        if (affected == 0) {
+            throw AppException.notFound("session");
+        }
         dbClient.execute(INSERT_REVOKED_TOKEN, payload.jti(), tokenExpiry);
 
         auditWriter.write(AuditWritePayload.builder(AuditEventType.SESSION_REVOKED, AuditResult.SUCCESS)
