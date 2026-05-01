@@ -1,0 +1,34 @@
+plugins {
+    id("org.springframework.boot")
+}
+
+dependencies {
+    implementation(project(":packages:common-types"))
+    implementation(project(":packages:common-errors"))
+    implementation(project(":packages:common-response"))
+    implementation(project(":packages:common-db"))
+    implementation(project(":packages:common-crypto"))
+    implementation(project(":packages:common-audit"))
+    implementation("org.springframework.boot:spring-boot-starter-web")
+    implementation("org.springframework.boot:spring-boot-starter-validation")
+    implementation("org.springframework.boot:spring-boot-starter-data-jdbc")
+    implementation("org.springframework.security:spring-security-crypto")
+    implementation("com.amazonaws.serverless:aws-serverless-java-container-springboot3:2.0.0")
+    implementation("com.amazonaws:aws-lambda-java-events:3.11.4")
+    implementation("com.amazonaws:aws-lambda-java-core:1.2.3")
+    implementation("io.jsonwebtoken:jjwt-api:0.12.5")
+    runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.5")
+    runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.5")
+    implementation("software.amazon.awssdk:sns:2.25.31")
+    compileOnly("org.projectlombok:lombok")
+    annotationProcessor("org.projectlombok:lombok")
+    testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation("org.mockito:mockito-core")
+    testImplementation("org.mockito:mockito-junit-jupiter")
+}
+
+tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
+    archiveBaseName.set("auth-service")
+    archiveVersion.set("1.0.0")
+    archiveClassifier.set("all")
+}

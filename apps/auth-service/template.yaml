@@ -1,0 +1,24 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: DeathTrap Auth Service — local SAM testing
+
+Resources:
+  AuthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: in.deathtrap.auth.AuthHandler::handleRequest
+      Runtime: java21
+      CodeUri: build/libs/auth-service-1.0.0-all.jar
+      MemorySize: 256
+      Timeout: 15
+      Environment:
+        Variables:
+          DB_URL: !Sub "{{resolve:ssm:/deathtrap/dev/db-url}}"
+          ENVIRONMENT: local
+          LOG_LEVEL: DEBUG
+      Events:
+        AuthApiProxy:
+          Type: Api
+          Properties:
+            Path: /auth/{proxy+}
+            Method: ANY

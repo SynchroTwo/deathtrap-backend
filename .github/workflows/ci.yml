@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  build-and-test:
+    name: Build, Lint & Test
+    runs-on: ubuntu-latest
+    env:
+      NEON_DB_URL: ${{ secrets.NEON_DB_URL }}
+      DB_URL: ${{ secrets.NEON_DB_URL }}
+      DB_USERNAME: ${{ secrets.DB_USERNAME }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET_CI }}
+      ENVIRONMENT: ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build all modules
+        run: ./gradlew build -x test
+
+      - name: Run Checkstyle
+        run: ./gradlew checkstyle
+
+      - name: Run unit tests
+        run: ./gradlew test
+
+      - name: OWASP Dependency Check
+        run: ./gradlew dependencyCheckAnalyze
+        continue-on-error: true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: '**/build/reports/tests/'
+          retention-days: 7
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: '**/build/reports/jacoco/'
+          retention-days: 7
+
+  cdk-synth:
+    name: CDK Synth (dev)
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    env:
+      AWS_ACCOUNT_DEV: ${{ secrets.AWS_ACCOUNT_DEV }}
+      AWS_DEFAULT_REGION: ap-south-1
+      AWS_ACCESS_KEY_ID: fake-key-for-synth
+      AWS_SECRET_ACCESS_KEY: fake-secret-for-synth
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+
+      - name: Install CDK dependencies
+        working-directory: infra
+        run: npm ci
+
+      - name: CDK Synth (validate templates)
+        working-directory: infra
+        run: npx cdk synth --context env=dev --quiet

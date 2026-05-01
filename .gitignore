@@ -1,0 +1,27 @@
+# Gradle
+.gradle/
+build/
+*.jar
+*.class
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+*.iml
+.idea/
+out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CDK
+cdk.out/
+infra/node_modules/
+infra/dist/
+
+# Coverage
+coverage/
