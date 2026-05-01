@@ -3,8 +3,8 @@ package in.deathtrap.auth.routes.otp;
 import in.deathtrap.common.audit.AuditWriter;
 import in.deathtrap.common.db.DbClient;
 import in.deathtrap.common.errors.AppException;
+import in.deathtrap.common.errors.ErrorCode;
 import in.deathtrap.common.types.dto.SendOtpRequest;
-import in.deathtrap.common.types.enums.OtpChannel;
 import in.deathtrap.common.types.enums.OtpPurpose;
 import java.time.Instant;
 import java.util.Optional;
@@ -36,8 +36,8 @@ class SendOtpHandlerTest {
     private SendOtpHandler handler;
 
     @Test
-    void validMobileSmsChannel_returns200WithExpiresIn() {
-        SendOtpRequest request = new SendOtpRequest("+919876543210", null, OtpChannel.SMS, OtpPurpose.REGISTRATION);
+    void validMobile_returns200WithExpiresIn() {
+        SendOtpRequest request = new SendOtpRequest("+919876543210", null, OtpPurpose.REGISTRATION);
         when(dbClient.queryOne(anyString(), any(), any())).thenReturn(Optional.empty());
 
         ResponseEntity<?> response = handler.sendOtp(request);
@@ -47,8 +47,18 @@ class SendOtpHandlerTest {
     }
 
     @Test
-    void validEmailChannel_returns200() {
-        SendOtpRequest request = new SendOtpRequest(null, "user@example.com", OtpChannel.EMAIL, OtpPurpose.REGISTRATION);
+    void validEmail_returns200() {
+        SendOtpRequest request = new SendOtpRequest(null, "user@example.com", OtpPurpose.REGISTRATION);
+        when(dbClient.queryOne(anyString(), any(), any())).thenReturn(Optional.empty());
+
+        ResponseEntity<?> response = handler.sendOtp(request);
+
+        assertEquals(200, response.getStatusCode().value());
+    }
+
+    @Test
+    void bothMobileAndEmail_returns200() {
+        SendOtpRequest request = new SendOtpRequest("+919876543210", "user@example.com", OtpPurpose.REGISTRATION);
         when(dbClient.queryOne(anyString(), any(), any())).thenReturn(Optional.empty());
 
         ResponseEntity<?> response = handler.sendOtp(request);
@@ -58,30 +68,30 @@ class SendOtpHandlerTest {
 
     @Test
     void bothMobileAndEmailNull_throwsValidationError() {
-        SendOtpRequest request = new SendOtpRequest(null, null, OtpChannel.SMS, OtpPurpose.REGISTRATION);
+        SendOtpRequest request = new SendOtpRequest(null, null, OtpPurpose.REGISTRATION);
 
         AppException ex = assertThrows(AppException.class, () -> handler.sendOtp(request));
 
-        assertEquals(in.deathtrap.common.errors.ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
     }
 
     @Test
     void invalidMobileFormat_throwsValidationError() {
-        SendOtpRequest request = new SendOtpRequest("12345", null, OtpChannel.SMS, OtpPurpose.REGISTRATION);
+        SendOtpRequest request = new SendOtpRequest("12345", null, OtpPurpose.REGISTRATION);
 
         AppException ex = assertThrows(AppException.class, () -> handler.sendOtp(request));
 
-        assertEquals(in.deathtrap.common.errors.ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
     }
 
     @Test
     void partyHasLockedOtp_throwsOtpLocked() {
-        SendOtpRequest request = new SendOtpRequest("+919876543210", null, OtpChannel.SMS, OtpPurpose.REGISTRATION);
-        Instant futurelock = Instant.now().plusSeconds(1800);
-        when(dbClient.queryOne(anyString(), any(), any())).thenReturn(Optional.of(futurelock));
+        SendOtpRequest request = new SendOtpRequest("+919876543210", null, OtpPurpose.REGISTRATION);
+        Instant futureLock = Instant.now().plusSeconds(1800);
+        when(dbClient.queryOne(anyString(), any(), any())).thenReturn(Optional.of(futureLock));
 
         AppException ex = assertThrows(AppException.class, () -> handler.sendOtp(request));
 
-        assertEquals(in.deathtrap.common.errors.ErrorCode.AUTH_OTP_LOCKED, ex.getErrorCode());
+        assertEquals(ErrorCode.AUTH_OTP_LOCKED, ex.getErrorCode());
     }
 }

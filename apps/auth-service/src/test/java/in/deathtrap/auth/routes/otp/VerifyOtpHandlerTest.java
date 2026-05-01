@@ -1,6 +1,8 @@
 package in.deathtrap.auth.routes.otp;
 
+import in.deathtrap.auth.config.JwtService;
 import in.deathtrap.common.audit.AuditWriter;
+import in.deathtrap.common.crypto.Sha256Util;
 import in.deathtrap.common.db.DbClient;
 import in.deathtrap.common.errors.AppException;
 import in.deathtrap.common.errors.ErrorCode;
@@ -17,12 +19,12 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -34,79 +36,96 @@ class VerifyOtpHandlerTest {
     private DbClient dbClient;
 
     @Mock
+    private JwtService jwtService;
+
+    @Mock
     private AuditWriter auditWriter;
 
     @InjectMocks
     private VerifyOtpHandler handler;
 
-    private static final BCryptPasswordEncoder BCRYPT = new BCryptPasswordEncoder();
-
-    private OtpLog validOtpLog(String otp) {
+    private OtpLog validOtpLog(String otp, OtpChannel channel) {
         return new OtpLog("otp-id-1", "party-1", PartyType.CREATOR,
-                OtpChannel.SMS, OtpPurpose.LOGIN, BCRYPT.encode(otp),
+                channel, OtpPurpose.LOGIN, Sha256Util.hashHex(otp),
                 0, false, null,
                 Instant.now().plusSeconds(600), Instant.now());
     }
 
-    @Test
-    void validOtp_returnsVerifiedTrue() {
-        String rawOtp = "123456";
-        VerifyOtpRequest request = new VerifyOtpRequest("party-1", OtpPurpose.LOGIN, rawOtp);
-        when(dbClient.queryOne(anyString(), any(), any(), any())).thenReturn(Optional.of(validOtpLog(rawOtp)));
-        when(dbClient.execute(anyString(), any())).thenReturn(1);
+    /** fetchOtp calls queryOne(sql, mapper, partyId, channel, purpose) = 5 args → 5 matchers. */
+    private void stubOtpQuery(Optional<OtpLog> first, Optional<OtpLog> second) {
+        doReturn(first).doReturn(second)
+                .when(dbClient).queryOne(anyString(), any(), any(), any(), any());
+    }
 
-        ResponseEntity<?> response = handler.verifyOtp(request);
+    private void stubOtpQuery(Optional<OtpLog> result) {
+        doReturn(result)
+                .when(dbClient).queryOne(anyString(), any(), any(), any(), any());
+    }
+
+    @Test
+    void bothOtpsValid_returnsVerifiedToken() {
+        String mobileOtp = "123456";
+        String emailOtp = "654321";
+        stubOtpQuery(
+                Optional.of(validOtpLog(mobileOtp, OtpChannel.SMS)),
+                Optional.of(validOtpLog(emailOtp, OtpChannel.EMAIL)));
+        when(jwtService.issueVerifiedToken(anyString(), any())).thenReturn("verified-jwt");
+
+        ResponseEntity<?> response = handler.verifyOtp(
+                new VerifyOtpRequest("party-1", mobileOtp, emailOtp, OtpPurpose.LOGIN));
 
         assertEquals(200, response.getStatusCode().value());
         verify(auditWriter).write(any());
     }
 
     @Test
-    void wrongOtpFirstAttempt_incrementsAttemptsAndThrows400() {
-        VerifyOtpRequest request = new VerifyOtpRequest("party-1", OtpPurpose.LOGIN, "000000");
-        when(dbClient.queryOne(anyString(), any(), any(), any())).thenReturn(Optional.of(validOtpLog("654321")));
-        when(dbClient.execute(anyString(), any())).thenReturn(1);
+    void wrongMobileOtp_throwsOtpInvalid() {
+        stubOtpQuery(Optional.of(validOtpLog("123456", OtpChannel.SMS)));
 
-        AppException ex = assertThrows(AppException.class, () -> handler.verifyOtp(request));
+        AppException ex = assertThrows(AppException.class,
+                () -> handler.verifyOtp(
+                        new VerifyOtpRequest("party-1", "000000", "654321", OtpPurpose.LOGIN)));
 
         assertEquals(ErrorCode.AUTH_OTP_INVALID, ex.getErrorCode());
-        verify(dbClient).execute(anyString(), any());
     }
 
     @Test
-    void wrongOtpThirdAttempt_setsLockedAndThrowsOtpLocked() {
+    void thirdFailureLocksMobileOtp() {
         OtpLog otpWith2Attempts = new OtpLog("otp-id-1", "party-1", PartyType.CREATOR,
-                OtpChannel.SMS, OtpPurpose.LOGIN, BCRYPT.encode("654321"),
+                OtpChannel.SMS, OtpPurpose.LOGIN, Sha256Util.hashHex("654321"),
                 2, false, null,
                 Instant.now().plusSeconds(600), Instant.now());
-        VerifyOtpRequest request = new VerifyOtpRequest("party-1", OtpPurpose.LOGIN, "000000");
-        when(dbClient.queryOne(anyString(), any(), any(), any())).thenReturn(Optional.of(otpWith2Attempts));
+        stubOtpQuery(Optional.of(otpWith2Attempts));
 
-        AppException ex = assertThrows(AppException.class, () -> handler.verifyOtp(request));
+        AppException ex = assertThrows(AppException.class,
+                () -> handler.verifyOtp(
+                        new VerifyOtpRequest("party-1", "000000", "000000", OtpPurpose.LOGIN)));
 
         assertEquals(ErrorCode.AUTH_OTP_LOCKED, ex.getErrorCode());
     }
 
     @Test
-    void expiredOtp_throwsOtpExpired() {
+    void expiredMobileOtp_throwsOtpExpired() {
         OtpLog expiredOtp = new OtpLog("otp-id-1", "party-1", PartyType.CREATOR,
-                OtpChannel.SMS, OtpPurpose.LOGIN, BCRYPT.encode("123456"),
+                OtpChannel.SMS, OtpPurpose.LOGIN, Sha256Util.hashHex("123456"),
                 0, false, null,
                 Instant.now().minusSeconds(1), Instant.now().minusSeconds(700));
-        VerifyOtpRequest request = new VerifyOtpRequest("party-1", OtpPurpose.LOGIN, "123456");
-        when(dbClient.queryOne(anyString(), any(), any(), any())).thenReturn(Optional.of(expiredOtp));
+        stubOtpQuery(Optional.of(expiredOtp));
 
-        AppException ex = assertThrows(AppException.class, () -> handler.verifyOtp(request));
+        AppException ex = assertThrows(AppException.class,
+                () -> handler.verifyOtp(
+                        new VerifyOtpRequest("party-1", "123456", "123456", OtpPurpose.LOGIN)));
 
         assertEquals(ErrorCode.AUTH_OTP_EXPIRED, ex.getErrorCode());
     }
 
     @Test
     void noOtpFoundForParty_throwsNotFound() {
-        VerifyOtpRequest request = new VerifyOtpRequest("party-1", OtpPurpose.LOGIN, "123456");
-        when(dbClient.queryOne(anyString(), any(), any(), any())).thenReturn(Optional.empty());
+        stubOtpQuery(Optional.empty());
 
-        AppException ex = assertThrows(AppException.class, () -> handler.verifyOtp(request));
+        AppException ex = assertThrows(AppException.class,
+                () -> handler.verifyOtp(
+                        new VerifyOtpRequest("party-1", "123456", "123456", OtpPurpose.LOGIN)));
 
         assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
     }

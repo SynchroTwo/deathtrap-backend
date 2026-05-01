@@ -2,12 +2,15 @@ package in.deathtrap.auth.routes.creator;
 
 import in.deathtrap.auth.config.JwtService;
 import in.deathtrap.common.audit.AuditWriter;
+import in.deathtrap.common.crypto.Sha256Util;
 import in.deathtrap.common.db.DbClient;
 import in.deathtrap.common.errors.AppException;
 import in.deathtrap.common.errors.ErrorCode;
+import in.deathtrap.common.types.domain.OtpLog;
 import in.deathtrap.common.types.domain.User;
 import in.deathtrap.common.types.dto.LoginRequest;
 import in.deathtrap.common.types.enums.KycStatus;
+import in.deathtrap.common.types.enums.OtpChannel;
 import in.deathtrap.common.types.enums.OtpPurpose;
 import in.deathtrap.common.types.enums.PartyType;
 import in.deathtrap.common.types.enums.UserStatus;
@@ -43,6 +46,9 @@ class LoginHandlerTest {
     @InjectMocks
     private LoginHandler handler;
 
+    private static final String MOBILE_OTP = "482931";
+    private static final String EMAIL_OTP = "719203";
+
     private User activeUser() {
         return new User("user-1", "Test User", LocalDate.of(1990, 1, 1),
                 "+919876543210", "test@example.com", null, null, null,
@@ -51,15 +57,23 @@ class LoginHandlerTest {
                 Instant.now(), Instant.now(), null);
     }
 
+    private OtpLog validOtpLog(String otp, OtpChannel channel) {
+        return new OtpLog("otp-id-1", "+919876543210", PartyType.CREATOR,
+                channel, OtpPurpose.LOGIN, Sha256Util.hashHex(otp),
+                0, false, null,
+                Instant.now().plusSeconds(600), Instant.now());
+    }
+
     private LoginRequest validRequest() {
-        return new LoginRequest("+919876543210", OtpPurpose.LOGIN, "valid-otp-token");
+        return new LoginRequest("+919876543210", MOBILE_OTP, EMAIL_OTP, null, null);
     }
 
     @Test
     void validLogin_returnsAccessTokenAndSessionId() {
         when(dbClient.queryOne(anyString(), any(), any())).thenReturn(Optional.of(activeUser()));
-        when(dbClient.queryOne(anyString(), any(), anyString(), any(Instant.class)))
-                .thenReturn(Optional.of("otp-id-1"));
+        when(dbClient.queryOne(anyString(), any(), any(), any()))
+                .thenReturn(Optional.of(validOtpLog(MOBILE_OTP, OtpChannel.SMS)))
+                .thenReturn(Optional.of(validOtpLog(EMAIL_OTP, OtpChannel.EMAIL)));
         when(jwtService.issueToken(anyString(), any(PartyType.class), anyString())).thenReturn("jwt-token");
 
         ResponseEntity<?> response = handler.login(validRequest());
@@ -91,24 +105,24 @@ class LoginHandlerTest {
     }
 
     @Test
-    void otpTokenExpired_throwsSessionInvalid() {
+    void mobileOtpNotFound_throwsNotFound() {
         when(dbClient.queryOne(anyString(), any(), any())).thenReturn(Optional.of(activeUser()));
-        when(dbClient.queryOne(anyString(), any(), anyString(), any(Instant.class)))
-                .thenReturn(Optional.empty());
+        when(dbClient.queryOne(anyString(), any(), any(), any())).thenReturn(Optional.empty());
 
         AppException ex = assertThrows(AppException.class, () -> handler.login(validRequest()));
 
-        assertEquals(ErrorCode.AUTH_SESSION_INVALID, ex.getErrorCode());
+        assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
     }
 
     @Test
-    void otpTokenOlderThan5Min_throwsSessionInvalid() {
+    void wrongMobileOtp_throwsOtpInvalid() {
         when(dbClient.queryOne(anyString(), any(), any())).thenReturn(Optional.of(activeUser()));
-        when(dbClient.queryOne(anyString(), any(), anyString(), any(Instant.class)))
-                .thenReturn(Optional.empty());
+        when(dbClient.queryOne(anyString(), any(), any(), any()))
+                .thenReturn(Optional.of(validOtpLog("999999", OtpChannel.SMS)));
 
-        AppException ex = assertThrows(AppException.class, () -> handler.login(validRequest()));
+        AppException ex = assertThrows(AppException.class,
+                () -> handler.login(new LoginRequest("+919876543210", "000000", EMAIL_OTP, null, null)));
 
-        assertEquals(ErrorCode.AUTH_SESSION_INVALID, ex.getErrorCode());
+        assertEquals(ErrorCode.AUTH_OTP_INVALID, ex.getErrorCode());
     }
 }
