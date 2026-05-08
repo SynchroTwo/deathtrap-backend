@@ -10,5 +10,7 @@ public record ChangePassphraseRequest(
         @NotBlank String newEncryptedPrivkeyB64,
         @NotBlank String newNonceB64,
         @NotBlank String newAuthTagB64,
+        String hibpPrefix,
+        String hibpSuffix,
         @NotNull Boolean hibpCheckResult
 ) {}

@@ -1,6 +1,7 @@
 plugins {
     id("org.springframework.boot") version "3.2.5" apply false
     id("io.spring.dependency-management") version "1.1.4" apply false
+    id("org.owasp.dependencycheck") version "12.1.0" apply false
 }
 
 allprojects {
@@ -8,6 +9,21 @@ allprojects {
     version = "1.0.0"
     repositories {
         mavenCentral()
+    }
+    apply(plugin = "org.owasp.dependencycheck")
+    extensions.configure<org.owasp.dependencycheck.gradle.extension.DependencyCheckExtension> {
+        format = "HTML"
+        outputDirectory = "${rootProject.buildDir}/reports/dependency-check"
+        failBuildOnCVSS = 7.0f
+        suppressionFile = "${rootProject.projectDir}/config/owasp-suppressions.xml"
+        // NVD API key: set via gradle.properties, NVD_API_KEY env var, or -PnvdApiKey=<key>
+        val nvdKey = System.getenv("NVD_API_KEY") ?: (project.findProperty("nvdApiKey") as String?)
+        if (!nvdKey.isNullOrBlank()) {
+            nvd.apiKey = nvdKey
+            nvd.delay = 1000  // ms between NVD API calls — stay well under rate limit
+        }
+        // OSS Index requires a separate Sonatype account — disable it, NVD is sufficient
+        analyzers.ossIndexEnabled = false
     }
 }
 

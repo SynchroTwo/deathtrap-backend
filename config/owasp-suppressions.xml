@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  OWASP Dependency-Check suppressions for DeathTrap backend.
+  Add entries here only when a CVE has been triaged and confirmed
+  not exploitable in our deployment context. Include a comment
+  explaining why and when to re-evaluate.
+
+  Reference: https://jeremylong.github.io/DependencyCheck/general/suppression.html
+-->
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+
+  <!--
+    Template entry — remove this comment and fill in real suppressions
+    as they are triaged:
+
+    <suppress>
+      <notes>CVE-XXXX-YYYY: affects feature X which we do not use. Re-evaluate on next minor upgrade.</notes>
+      <cve>CVE-XXXX-YYYY</cve>
+    </suppress>
+  -->
+
+</suppressions>

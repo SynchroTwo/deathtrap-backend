@@ -12,6 +12,8 @@ public record RegisterCreatorRequest(
         String address,
         String aadhaarRef,
         String kycProviderRef,
+        String hibpPrefix,
+        String hibpSuffix,
         boolean hibpCheckResult,
         int entropyBits,
         @NotNull String publicKeyPem,

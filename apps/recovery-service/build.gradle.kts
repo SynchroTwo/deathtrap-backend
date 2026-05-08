@@ -26,6 +26,8 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.mockito:mockito-core")
     testImplementation("org.mockito:mockito-junit-jupiter")
+    testImplementation(testFixtures(project(":packages:common-db")))
+    testImplementation("io.zonky.test:embedded-postgres:2.0.6")
 }
 tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
     archiveBaseName.set("recovery-service"); archiveVersion.set("1.0.0"); archiveClassifier.set("all")

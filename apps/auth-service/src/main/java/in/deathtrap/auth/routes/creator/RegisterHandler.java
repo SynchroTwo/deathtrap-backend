@@ -4,6 +4,7 @@ import in.deathtrap.auth.config.JwtService;
 import in.deathtrap.common.audit.AuditWritePayload;
 import in.deathtrap.common.audit.AuditWriter;
 import in.deathtrap.common.crypto.CsprngUtil;
+import in.deathtrap.common.crypto.HibpClient;
 import in.deathtrap.common.db.DbClient;
 import in.deathtrap.common.errors.AppException;
 import in.deathtrap.common.types.api.ApiResponse;
@@ -68,12 +69,15 @@ public class RegisterHandler {
     private final DbClient dbClient;
     private final JwtService jwtService;
     private final AuditWriter auditWriter;
+    private final HibpClient hibpClient;
 
     /** Constructs RegisterHandler with required dependencies. */
-    public RegisterHandler(DbClient dbClient, JwtService jwtService, AuditWriter auditWriter) {
+    public RegisterHandler(DbClient dbClient, JwtService jwtService,
+            AuditWriter auditWriter, HibpClient hibpClient) {
         this.dbClient = dbClient;
         this.jwtService = jwtService;
         this.auditWriter = auditWriter;
+        this.hibpClient = hibpClient;
     }
 
     /** POST /auth/register — atomically creates user + crypto records in one transaction. */
@@ -87,7 +91,8 @@ public class RegisterHandler {
         }
         jwtService.validateVerifiedToken(authHeader.substring(7));
 
-        if (!request.hibpCheckResult() || request.entropyBits() < MIN_ENTROPY_BITS) {
+        hibpClient.checkPassphrase(request.hibpPrefix(), request.hibpSuffix(), request.hibpCheckResult());
+        if (request.entropyBits() < MIN_ENTROPY_BITS) {
             throw AppException.passphraseCompromised();
         }
 

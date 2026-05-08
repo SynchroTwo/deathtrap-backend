@@ -1,0 +1,530 @@
+DEATHTRAP
+Backend Development — Sprint 9 Instructions for Claude Code
+Hardening + Integration Tests (Security · Load Tests · HIBP · Argon2id Benchmarks)
+Sprint 9  |  Java 21 + Spring Boot 3.2.5  |  AWS Lambda  |  Zero-Knowledge
+
+Sprint 1–8     Sprint 9          Sprint 10
+COMPLETE       IN PROGRESS       Pre-Production + Go-Live
+
+════════════════════════════════════════════════════════════
+1. SPRINT 8 RECAP — WHAT IS ALREADY BUILT
+════════════════════════════════════════════════════════════
+
+Sprint 8 is complete. All 6 Lambda services are fully implemented:
+  auth-service        10 endpoints — COMPLETE
+  locker-service       8 endpoints — COMPLETE
+  recovery-service     6 endpoints — COMPLETE
+  trigger-service      4 endpoints — COMPLETE
+  sqs-consumer         threshold logic — COMPLETE
+  audit-service        2 endpoints + daily checkpoint — COMPLETE
+
+Structured JSON logging, X-Ray tracing, and CloudWatch alarms are in place.
+All tests from Sprints 1–8 pass. Package root: in.deathtrap.*
+
+This sprint is HARDENING — no new user-facing endpoints.
+The goal is security review, integration testing, and closing the gaps
+identified during architecture planning.
+
+
+════════════════════════════════════════════════════════════
+2. SPRINT 9 GOAL
+════════════════════════════════════════════════════════════
+
+GOAL: Make the backend production-ready by:
+  1. Upgrading HIBP from client-side flag to real server-side k-anonymity API call
+  2. Writing full integration tests (Testcontainers + PostgreSQL) for all services
+  3. Writing end-to-end tests against the full registration → login → locker → recovery flow
+  4. Running an Argon2id parameter benchmark document (cross-platform guidance)
+  5. Running a SECURITY REVIEW CHECKLIST — all P0 items must pass before Sprint 10
+  6. OWASP dependency scan: zero critical CVEs allowed
+
+
+════════════════════════════════════════════════════════════
+3. TASK 1 — REAL HIBP INTEGRATION (Server-Side)
+════════════════════════════════════════════════════════════
+
+BACKGROUND:
+  Sprints 2 and 3 accepted a client-provided hibpCheckResult: boolean flag.
+  This was marked as a stub. Sprint 9 replaces it with a real server-side
+  k-anonymity HIBP API call.
+
+WHAT IS k-ANONYMITY HIBP:
+  The client never sends the full passphrase to the server.
+  Instead: client hashes the passphrase with SHA-1, sends the first 5 chars (the prefix).
+  The server sends those 5 chars to api.pwnedpasswords.com and receives back a list of
+  SHA-1 hash suffixes + breach counts. Server checks if the client's full hash suffix
+  appears in the list.
+
+Since the server in DeathTrap does NOT receive the passphrase or its SHA-1 hash,
+implement the HIBP check as follows:
+
+Client sends (in RegisterCreatorRequest and ChangePassphraseRequest):
+  hibpPrefix        String — first 5 chars of SHA-1(passphrase)  [already hex]
+  hibpSuffix        String — remaining 35 chars of SHA-1(passphrase) [to match against list]
+  hibpCheckResult   boolean — client's own result (keep as fallback)
+
+Server behavior:
+  1. Call HIBP API: GET https://api.pwnedpasswords.com/range/{hibpPrefix}
+     - Set User-Agent header: "DeathTrap/1.0"
+     - Timeout: 3 seconds
+     - If API call fails (timeout, network error): fall back to trusting hibpCheckResult
+       and log WARN: "HIBP API unavailable, trusting client flag"
+  2. Parse the response: each line is "SUFFIX:COUNT"
+     Search for a line where the suffix (uppercase) == hibpSuffix.toUpperCase()
+  3. If found: throw AppException.of(ErrorCode.AUTH_PASSPHRASE_COMPROMISED)
+  4. If not found: passphrase passes — proceed with registration/change.
+
+Create: packages/common-crypto/src/main/java/in/deathtrap/common/crypto/HibpClient.java
+
+@Component
+@Slf4j
+public class HibpClient {
+
+  private static final String HIBP_API = "https://api.pwnedpasswords.com/range/";
+  private static final int TIMEOUT_MS = 3000;
+
+  /**
+   * Checks if the passphrase appears in known data breaches using k-anonymity.
+   * @param hibpPrefix first 5 hex chars of SHA-1(passphrase)
+   * @param hibpSuffix remaining 35 hex chars of SHA-1(passphrase)
+   * @param clientFlag client-side check result (used as fallback if API unavailable)
+   * @throws AppException if passphrase is breached
+   */
+  public void checkPassphrase(String hibpPrefix, String hibpSuffix, boolean clientFlag) {
+    // Validate inputs
+    if (hibpPrefix == null || hibpPrefix.length() != 5) {
+      throw AppException.of(ErrorCode.VALIDATION_FAILED);
+    }
+    if (hibpSuffix == null || hibpSuffix.length() != 35) {
+      throw AppException.of(ErrorCode.VALIDATION_FAILED);
+    }
+
+    try {
+      java.net.URL url = new java.net.URL(HIBP_API + hibpPrefix.toUpperCase());
+      java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+      conn.setRequestMethod("GET");
+      conn.setConnectTimeout(TIMEOUT_MS);
+      conn.setReadTimeout(TIMEOUT_MS);
+      conn.setRequestProperty("User-Agent", "DeathTrap/1.0");
+      conn.setRequestProperty("Add-Padding", "true"); // HIBP padding for privacy
+
+      int responseCode = conn.getResponseCode();
+      if (responseCode != 200) {
+        log.warn("HIBP API returned non-200: {} — trusting client flag={}", responseCode, clientFlag);
+        checkClientFlag(clientFlag);
+        return;
+      }
+
+      String suffixUpper = hibpSuffix.toUpperCase();
+      try (java.io.BufferedReader reader = new java.io.BufferedReader(
+               new java.io.InputStreamReader(conn.getInputStream()))) {
+        String line;
+        while ((line = reader.readLine()) != null) {
+          String[] parts = line.split(":");
+          if (parts.length >= 1 && parts[0].trim().equalsIgnoreCase(suffixUpper)) {
+            // Found in breach list
+            throw AppException.passphraseCompromised();
+          }
+        }
+      }
+      // Not found — passphrase is clean
+    } catch (AppException e) {
+      throw e; // re-throw AppException (breached)
+    } catch (Exception e) {
+      log.warn("HIBP API call failed: {} — trusting client flag={}", e.getMessage(), clientFlag);
+      checkClientFlag(clientFlag);
+    }
+  }
+
+  private void checkClientFlag(boolean clientFlag) {
+    if (!clientFlag) {
+      throw AppException.passphraseCompromised();
+    }
+  }
+}
+
+CHANGES REQUIRED IN auth-service:
+  1. RegisterHandler: replace hibpCheckResult boolean acceptance with:
+       hibpPrefix + hibpSuffix + hibpCheckResult in request body
+       Call HibpClient.checkPassphrase() before any DB writes.
+  2. ChangePassphraseHandler: same change.
+  3. Update RegisterCreatorRequest DTO: add hibpPrefix (String), hibpSuffix (String).
+  4. Update ChangePassphraseRequest DTO: add hibpPrefix (String), hibpSuffix (String).
+
+Add to common-crypto build.gradle.kts (no new library needed — uses java.net.URL).
+
+
+════════════════════════════════════════════════════════════
+4. TASK 2 — INTEGRATION TESTS (Testcontainers)
+════════════════════════════════════════════════════════════
+
+Create integration tests in each service's test directory.
+Use Testcontainers to spin up a real PostgreSQL container.
+Run Flyway migrations against it before each test class.
+DO NOT mock DbClient in integration tests — use the real DB.
+
+Add to root build.gradle.kts testImplementation for all subprojects:
+  testImplementation("org.testcontainers:junit-jupiter:1.19.8")
+  testImplementation("org.testcontainers:postgresql:1.19.8")
+  testImplementation("org.springframework.boot:spring-boot-starter-test")
+
+Create a shared test base class:
+  packages/common-db/src/test/java/in/deathtrap/common/db/IntegrationTestBase.java
+
+@Testcontainers
+public abstract class IntegrationTestBase {
+
+  @Container
+  static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15")
+    .withDatabaseName("deathtrap_test")
+    .withUsername("dt_test")
+    .withPassword("dt_test_pw");
+
+  @BeforeAll
+  static void runMigrations() {
+    Flyway.configure()
+      .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
+      .locations("filesystem:../../migrations/sql")
+      .load()
+      .migrate();
+  }
+
+  protected DataSource dataSource() {
+    HikariConfig config = new HikariConfig();
+    config.setJdbcUrl(postgres.getJdbcUrl());
+    config.setUsername(postgres.getUsername());
+    config.setPassword(postgres.getPassword());
+    return new HikariDataSource(config);
+  }
+}
+
+
+Create the following integration test classes:
+
+────────────────────────────────────────────────────────────
+4.1  AuthServiceIntegrationTest.java
+────────────────────────────────────────────────────────────
+
+Location: apps/auth-service/src/test/java/in/deathtrap/auth/AuthServiceIntegrationTest.java
+
+Scenarios (using real DB, mock SNS/SES):
+  Test 1: Full OTP send → OTP hashed in otp_log, not plaintext
+  Test 2: OTP verify with wrong value → attempts incremented in DB
+  Test 3: OTP verify correct → verified=TRUE in DB
+  Test 4: Full creator registration:
+    - OTP verified in DB first
+    - All 4 crypto rows inserted atomically (party_salts, party_public_keys,
+      encrypted_privkey_blobs, kyc_flags)
+    - user row with status=active
+    - locker_meta NOT created yet (that is /locker/init)
+  Test 5: Duplicate mobile → 409, no partial rows inserted
+  Test 6: Login → session row inserted, JWT jti matches session_id
+  Test 7: Logout → revoked_at set in sessions, jti in revoked_tokens
+  Test 8: Rate limit — 3 OTP sends in same hour → 4th returns 429
+
+────────────────────────────────────────────────────────────
+4.2  LockerServiceIntegrationTest.java
+────────────────────────────────────────────────────────────
+
+Location: apps/locker-service/src/test/java/in/deathtrap/locker/LockerServiceIntegrationTest.java
+
+Scenarios (mock S3):
+  Test 1: /locker/init — creates locker_meta + exactly 24 asset_index rows
+  Test 2: /locker/init called twice → 409 CONFLICT on second call
+  Test 3: PUT /locker/blob/bank_accounts — blob_versions row inserted, asset status=filled
+  Test 4: PATCH /locker/asset/{id}/skip — status=skipped, completeness updated
+  Test 5: Completeness score: 12 filled → 50%
+  Test 6: POST /locker/nominee/assign → assignment row inserted
+  Test 7: DELETE /locker/nominee/unassign → removed_at set (soft delete)
+  Test 8: GET /locker/sync?lastPulledAt=0 → returns all 24 assets in created
+
+────────────────────────────────────────────────────────────
+4.3  RecoveryServiceIntegrationTest.java
+────────────────────────────────────────────────────────────
+
+Scenarios (mock S3):
+  Test 1: POST /recovery/blob — recovery_blobs row + 3 layer rows inserted
+  Test 2: POST /recovery/blob again — first superseded, rebuild_log entry created
+  Test 3: POST /recovery/session — session row with 48h lockedUntil
+  Test 4: POST /recovery/session/peel — peel event inserted with hash (not raw bytes)
+  Test 5: Peel out of order → 400 VALIDATION_FAILED
+
+────────────────────────────────────────────────────────────
+4.4  End-to-End Flow Test
+────────────────────────────────────────────────────────────
+
+Location: apps/auth-service/src/test/java/in/deathtrap/auth/EndToEndFlowTest.java
+
+Tests the complete registration → locker → recovery flow against a real DB.
+Services are called directly (not via HTTP) — instantiate handlers with real dependencies.
+
+  Test: FullRegistrationToLockerFlow
+    1. Send OTP (mobile + email) → otp_log has 2 rows
+    2. Verify both OTPs → verified=true in otp_log
+    3. Register creator → user + 4 crypto rows in DB
+    4. Login → session row + JWT issued
+    5. Init locker → 24 asset_index rows
+    6. Upload blob for bank_accounts → blob_versions row, completeness 1/24 (4%)
+    7. Invite nominee → nominees row with status=invited
+    8. (Nominee) Register nominee → 3 crypto rows for nominee, blob rebuild SQS msg logged
+    9. Store recovery blob (1 layer test) → recovery_blobs row + 1 layer row
+   10. Logout → revoked_at set, jti in revoked_tokens
+   Verify no plaintext OTP, passphrase, or key material appears in any DB row.
+
+
+════════════════════════════════════════════════════════════
+5. TASK 3 — SECURITY REVIEW CHECKLIST
+════════════════════════════════════════════════════════════
+
+Run each check below. ALL P0 items must PASS before Sprint 10 begins.
+Document pass/fail results as comments in a new file:
+  SECURITY_REVIEW.md in the project root.
+
+P0 ITEMS — MUST PASS:
+
+  [ ] S1: No plaintext secrets in codebase or logs
+      Command: grep -rn "password\|secret\|jwt_secret\|neon_db" --include="*.java" . \
+               | grep -v "//\|test\|\.example\|env var\|getenv\|@Value"
+      Must return zero matches with actual values.
+
+  [ ] S2: All endpoints except public auth routes require valid JWT
+      Verify: /auth/otp/send — public (no JWT)
+              /auth/otp/verify — public
+              /auth/register — verified_token JWT only
+              /auth/session POST — public (login)
+              /auth/session DELETE — session JWT required
+              All /locker/* — session JWT required
+              All /recovery/* — session JWT required
+              All /trigger/* — session JWT required
+              All /audit/* — admin JWT required
+
+  [ ] S3: Server never stores or logs plaintext OTP
+      grep -rn "otpValue\|rawOtp\|plaintext.*otp\|otp.*plain" --include="*.java" .
+      Must return zero results.
+
+  [ ] S4: Constant-time OTP comparison used everywhere
+      grep -rn "String.equals\|\.equals(otp\|\.equals(hash" --include="*.java" .
+      Must return zero results where OTP or hash comparison occurs.
+      Only MessageDigest.isEqual() or equivalent allowed.
+
+  [ ] S5: Server never stores private key plaintext
+      grep -rn "privateKey\b\|private_key\b" --include="*.java" . \
+      | grep -v "//\|encrypted\|ciphertext\|blob\|EncryptedPriv"
+      Must return zero results where raw private key is stored.
+
+  [ ] S6: No SQL string concatenation (parameterized queries only)
+      grep -rn "\"SELECT.*\" +" --include="*.java" .
+      grep -rn "\"INSERT.*\" +" --include="*.java" .
+      grep -rn "\"UPDATE.*\" +" --include="*.java" .
+      Manual review of all db.execute() and db.query() calls.
+
+  [ ] S7: Webhook signature validated with constant-time compare
+      Verify DeathEventWebhookHandler uses MessageDigest.isEqual().
+      grep -n "isEqual" apps/trigger-service/src --include="*.java" -r
+      Must find at least one call in webhook handler.
+
+  [ ] S8: Revoked token check in Lambda Authorizer
+      Verify LambdaAuthorizer checks revoked_tokens table for every request.
+      Integration test: issue JWT, logout (insert jti into revoked_tokens),
+      then call protected endpoint → must get 401.
+
+  [ ] S9: Audit hash chain produces unique hashes
+      Integration test (see 4.4): after 10 audit writes, verify all entry_hash values are unique.
+      SELECT COUNT(DISTINCT entry_hash) = COUNT(*) FROM audit_log
+
+  [ ] S10: All API responses include security headers
+      curl -I https://localhost:3000/auth/otp/send -X POST -d '{}'
+      Response must include: Strict-Transport-Security, X-Frame-Options: DENY,
+        X-Content-Type-Options: nosniff, Cache-Control: no-store.
+      Verify via unit test on ResponseBuilder.
+
+P1 ITEMS — SHOULD PASS:
+
+  [ ] S11: OWASP dependency check — zero critical CVEs
+      ./gradlew dependencyCheckAnalyze
+      Open build/reports/dependency-check-report.html
+      Zero CRITICAL severity findings allowed.
+
+  [ ] S12: Stack traces never appear in API responses
+      Trigger an INTERNAL_ERROR intentionally in tests — verify response body
+      contains only { "error": "INTERNAL_ERROR", "message": "..." } with no stack trace.
+
+  [ ] S13: SQS DLQ monitored — any failed message triggers alarm
+      CDK alarm already added in Sprint 8. Verify DLQ ARN is correct.
+
+  [ ] S14: All Lambda handlers return non-200 for malformed JSON input
+      Test with curl: send invalid JSON body to each endpoint.
+      Must return 400 VALIDATION_FAILED, not 500.
+
+
+════════════════════════════════════════════════════════════
+6. TASK 4 — ARGON2id PARAMETER GUIDANCE DOCUMENT
+════════════════════════════════════════════════════════════
+
+The server does NOT run Argon2id (this is mobile-side only).
+However, Sprint 9 must produce a reference document for the mobile team.
+
+Create: ARGON2ID_PARAMETERS.md in the project root.
+
+Content to include:
+  Recommended parameters for DeathTrap (balance security vs mobile performance):
+    Algorithm:   Argon2id
+    Memory cost: 65536 KB (64 MB) — for mid-range Android/iOS
+    Iterations:  3
+    Parallelism: 2
+    Output:      32 bytes (256 bits) — used as master key for HKDF
+
+  Target benchmark: ≥ 500ms on the lowest-spec supported device.
+  Devices to benchmark: Android Go (1GB RAM), iPhone SE 2nd gen.
+  If benchmark shows < 500ms: increase iterations to 4 or memory to 128MB.
+  If benchmark shows > 2s: decrease memory to 32MB as fallback.
+
+  Cross-platform libraries:
+    iOS:   CryptoKit does not support Argon2id. Use libsodium via swift-sodium or argon2-swift.
+    Android: Argon2Kt library (https://github.com/lambdapioneer/argon2kt)
+
+  Derivation chain:
+    masterKey  = Argon2id(passphrase, salt, params) → 32 bytes
+    lockerKey  = HKDF-SHA256(masterKey, salt="locker", info="AES256GCM") → 32 bytes
+    kdfKey     = HKDF-SHA256(masterKey, salt="keypair", info="ECDH_P256") → 32 bytes
+    [use kdfKey to deterministically derive ECDH keypair]
+
+  NOTE: The salt (32 bytes CSPRNG) is generated on first registration and stored
+  server-side in party_salts. It is NOT secret — only the passphrase provides entropy.
+
+This document is for the mobile team — it should be written in plain English.
+
+
+════════════════════════════════════════════════════════════
+7. TASK 5 — LOAD TEST CONFIGURATION
+════════════════════════════════════════════════════════════
+
+Create a simple load test script using Apache JMeter or k6.
+Use k6 (JavaScript) — simpler and CI-friendly.
+
+Create: loadtest/auth_endpoints.js
+
+import http from 'k6/http';
+import { check, sleep } from 'k6';
+
+export const options = {
+  stages: [
+    { duration: '30s', target: 10 },   // ramp up to 10 VUs
+    { duration: '60s', target: 10 },   // hold at 10
+    { duration: '30s', target: 0 },    // ramp down
+  ],
+  thresholds: {
+    http_req_failed:   ['rate<0.01'],  // error rate < 1%
+    http_req_duration: ['p(95)<2000'], // 95th percentile < 2s
+  },
+};
+
+const BASE = __ENV.BASE_URL || 'http://localhost:3000';
+
+export default function () {
+  // Test OTP send endpoint
+  const resp = http.post(`${BASE}/auth/otp/send`,
+    JSON.stringify({ mobile: '+919876543210', purpose: 'registration' }),
+    { headers: { 'Content-Type': 'application/json' } }
+  );
+  check(resp, { 'otp send 200': (r) => r.status === 200 || r.status === 429 });
+  sleep(1);
+}
+
+Create: loadtest/README.md
+  Instructions:
+    Install k6: brew install k6
+    Run: BASE_URL=http://localhost:3000 k6 run loadtest/auth_endpoints.js
+    For AWS: BASE_URL=https://api.deathtrap.in k6 run loadtest/auth_endpoints.js
+
+
+════════════════════════════════════════════════════════════
+8. TASK 6 — OWASP DEPENDENCY SCAN FIX
+════════════════════════════════════════════════════════════
+
+Run: ./gradlew dependencyCheckAnalyze
+Open: build/reports/dependency-check-report.html
+
+For any CRITICAL CVE found:
+  1. Update the dependency to the patched version.
+  2. If no patch exists, add a suppression in owasp-suppressions.xml with a comment
+     explaining why the CVE is not exploitable in this context.
+  3. Re-run the scan to confirm zero critical findings.
+
+Common updates likely needed:
+  - Jackson: ensure >= 2.16.0
+  - Spring Boot: ensure >= 3.2.5
+  - Bouncy Castle: ensure bcprov-jdk18on >= 1.77
+  - AWS SDK: ensure >= 2.25.0
+
+Add to root build.gradle.kts OWASP plugin config:
+  dependencyCheck {
+    suppressionFile = "owasp-suppressions.xml"
+    failBuildOnCVSS = 7.0  // fail on HIGH or CRITICAL (CVSS >= 7.0)
+    format = "HTML"
+  }
+
+
+════════════════════════════════════════════════════════════
+9. TESTING REQUIREMENTS FOR SPRINT 9
+════════════════════════════════════════════════════════════
+
+Sprint 9 tests are predominantly integration tests. Unit test additions are minimal.
+
+Unit tests to add:
+
+HibpClientTest.java:
+  Test 1: API returns suffix in list → throws AUTH_PASSPHRASE_COMPROMISED
+  Test 2: API returns suffix NOT in list → no exception
+  Test 3: API times out → falls back to clientFlag=true → no exception
+  Test 4: API times out → falls back to clientFlag=false → throws AUTH_PASSPHRASE_COMPROMISED
+  Test 5: invalid hibpPrefix (not 5 chars) → throws VALIDATION_FAILED
+  Test 6: API returns 429 → treated as unavailable, uses clientFlag
+
+Integration tests: see section 4 above (AuthService, LockerService, RecoveryService, E2E).
+
+Minimum new test count for Sprint 9: 6 unit + 28 integration = 34 tests.
+
+Run full test suite: ./gradlew test
+All Sprints 1–8 tests + all new Sprint 9 tests must pass.
+
+
+════════════════════════════════════════════════════════════
+10. RECOMMENDED IMPLEMENTATION ORDER
+════════════════════════════════════════════════════════════
+
+  #   Task                                     Estimated Effort
+  1   HibpClient + update Register + Change     Medium
+  2   IntegrationTestBase (Testcontainers)      Small
+  3   AuthServiceIntegrationTest                Medium
+  4   LockerServiceIntegrationTest              Medium
+  5   RecoveryServiceIntegrationTest            Medium
+  6   EndToEndFlowTest                          Large
+  7   Security checklist — run all P0 checks    Medium (fix issues as found)
+  8   OWASP scan + fix any critical CVEs        Small-Medium
+  9   ARGON2ID_PARAMETERS.md                    Small
+  10  Load test script                          Small
+  11  SECURITY_REVIEW.md — document results     Small
+  12  ./gradlew test — all tests pass           Verification
+
+
+════════════════════════════════════════════════════════════
+11. DEFINITION OF DONE FOR SPRINT 9
+════════════════════════════════════════════════════════════
+
+  [ ] HIBP upgraded to real server-side k-anonymity API call in Register + ChangePassphrase
+  [ ] HIBP falls back to clientFlag if API unavailable (non-blocking)
+  [ ] AuthServiceIntegrationTest: all 8 scenarios pass against real Testcontainers PostgreSQL
+  [ ] LockerServiceIntegrationTest: all 8 scenarios pass
+  [ ] RecoveryServiceIntegrationTest: all 5 scenarios pass
+  [ ] EndToEndFlowTest: full 10-step flow passes against real DB
+  [ ] All S0 security checklist items PASS (document in SECURITY_REVIEW.md)
+  [ ] OWASP dependencyCheckAnalyze — zero CRITICAL CVEs (CVSS >= 9.0)
+  [ ] ARGON2ID_PARAMETERS.md created with correct parameters and mobile library guidance
+  [ ] Load test script created in loadtest/ directory
+  [ ] All previous sprint tests still pass (Sprints 1–8)
+  [ ] ./gradlew checkstyle zero violations
+  [ ] Code pushed to GitHub. CI passes including OWASP scan.
+
+DEATHTRAP  |  Sprint 9  |  Hardening + Integration Tests
+Confidential  |  Internal Engineering Use Only  |  May 2026

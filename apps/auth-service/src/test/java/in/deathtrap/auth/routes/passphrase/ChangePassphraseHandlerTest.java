@@ -3,6 +3,7 @@ package in.deathtrap.auth.routes.passphrase;
 import in.deathtrap.auth.config.JwtService;
 import in.deathtrap.auth.service.BlobRebuildNotifier;
 import in.deathtrap.common.audit.AuditWriter;
+import in.deathtrap.common.crypto.HibpClient;
 import in.deathtrap.common.db.DbClient;
 import in.deathtrap.common.errors.AppException;
 import in.deathtrap.common.errors.ErrorCode;
@@ -21,7 +22,9 @@ import org.springframework.http.ResponseEntity;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -33,12 +36,15 @@ class ChangePassphraseHandlerTest {
     @Mock private JwtService jwtService;
     @Mock private AuditWriter auditWriter;
     @Mock private BlobRebuildNotifier blobRebuildNotifier;
+    @Mock private HibpClient hibpClient;
 
     @InjectMocks private ChangePassphraseHandler handler;
 
     private static final String BEARER = "Bearer valid-jwt";
     private static final String VALID_HEX_64 = "c".repeat(64);
     private static final String VALID_PUBKEY = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQ==\n-----END PUBLIC KEY-----";
+    private static final String HIBP_PREFIX = "ABCDE";
+    private static final String HIBP_SUFFIX = "B".repeat(35);
 
     private JwtPayload creatorJwt() {
         return new JwtPayload("creator-1", PartyType.CREATOR, "session-current",
@@ -51,14 +57,8 @@ class ChangePassphraseHandlerTest {
     }
 
     private ChangePassphraseRequest validRequest() {
-        return new ChangePassphraseRequest(VALID_PUBKEY, VALID_HEX_64, "encrypted==", "nonce==", "authTag==", true);
-    }
-
-    private void mockTransactionAndQueries(long maxVersion) {
-        when(dbClient.query(anyString(), any(), any(), any()))
-                .thenReturn(List.of(maxVersion));
-        when(dbClient.query(anyString(), any(), any(), any(), any()))
-                .thenReturn(List.of());
+        return new ChangePassphraseRequest(VALID_PUBKEY, VALID_HEX_64, "encrypted==", "nonce==", "authTag==",
+                HIBP_PREFIX, HIBP_SUFFIX, true);
     }
 
     @Test
@@ -75,12 +75,11 @@ class ChangePassphraseHandlerTest {
     void hibpCheckFalse_throwsPassphraseCompromised() {
         when(jwtService.validateToken(anyString())).thenReturn(creatorJwt());
         when(dbClient.query(anyString(), any(), any())).thenReturn(List.of(1L));
-
-        ChangePassphraseRequest bad = new ChangePassphraseRequest(
-                VALID_PUBKEY, VALID_HEX_64, "encrypted==", "nonce==", "authTag==", false);
+        doThrow(AppException.passphraseCompromised())
+                .when(hibpClient).checkPassphrase(anyString(), anyString(), anyBoolean());
 
         AppException ex = assertThrows(AppException.class,
-                () -> handler.changePassphrase(bad, BEARER));
+                () -> handler.changePassphrase(validRequest(), BEARER));
 
         assertEquals(ErrorCode.AUTH_PASSPHRASE_COMPROMISED, ex.getErrorCode());
     }
@@ -100,7 +99,7 @@ class ChangePassphraseHandlerTest {
     void validNomineeRequest_resolvesBlobRebuild() {
         when(jwtService.validateToken(anyString())).thenReturn(nomineeJwt());
         when(dbClient.query(anyString(), any(), any()))
-                .thenReturn(List.of(1L))          // OTP verified
+                .thenReturn(List.of(1L))           // OTP verified
                 .thenReturn(List.of("creator-1")); // nominee creator lookup
 
         handler.changePassphrase(validRequest(), BEARER);

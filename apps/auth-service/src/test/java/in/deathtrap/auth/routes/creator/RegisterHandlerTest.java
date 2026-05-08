@@ -2,6 +2,7 @@ package in.deathtrap.auth.routes.creator;
 
 import in.deathtrap.auth.config.JwtService;
 import in.deathtrap.common.audit.AuditWriter;
+import in.deathtrap.common.crypto.HibpClient;
 import in.deathtrap.common.db.DbClient;
 import in.deathtrap.common.errors.AppException;
 import in.deathtrap.common.errors.ErrorCode;
@@ -18,7 +19,9 @@ import org.springframework.http.ResponseEntity;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -35,15 +38,21 @@ class RegisterHandlerTest {
     @Mock
     private AuditWriter auditWriter;
 
+    @Mock
+    private HibpClient hibpClient;
+
     @InjectMocks
     private RegisterHandler handler;
+
+    private static final String HIBP_PREFIX = "ABCDE";
+    private static final String HIBP_SUFFIX = "A".repeat(35);
 
     private RegisterCreatorRequest validRequest() {
         return new RegisterCreatorRequest(
                 "Test User", LocalDate.of(1990, 1, 1),
                 "+919876543210", "test@example.com", "Test Address",
                 "XXXX1234", "KYC-REF-001",
-                true, 80,
+                HIBP_PREFIX, HIBP_SUFFIX, true, 80,
                 "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYFK4EEAAoDQgAE\n-----END PUBLIC KEY-----",
                 "abc123fingerprint",
                 "encryptedPrivkeyBase64==", "nonceBase64==", "authTagBase64==",
@@ -73,15 +82,11 @@ class RegisterHandlerTest {
     @Test
     void hibpFailed_throwsPassphraseCompromised() {
         when(jwtService.validateVerifiedToken(anyString())).thenReturn("+919876543210");
-        RegisterCreatorRequest bad = new RegisterCreatorRequest(
-                "Test User", LocalDate.of(1990, 1, 1),
-                "+919876543210", "test@example.com", "Test Address",
-                "XXXX1234", "KYC-REF-001", false, 80,
-                "-----BEGIN PUBLIC KEY-----\ndata\n-----END PUBLIC KEY-----",
-                "fp", "enc==", "nonce==", "tag==", "a".repeat(64), 1, 12);
+        doThrow(AppException.passphraseCompromised())
+                .when(hibpClient).checkPassphrase(anyString(), anyString(), anyBoolean());
 
         AppException ex = assertThrows(AppException.class,
-                () -> handler.register(bad, "Bearer valid-token"));
+                () -> handler.register(validRequest(), "Bearer valid-token"));
 
         assertEquals(ErrorCode.AUTH_PASSPHRASE_COMPROMISED, ex.getErrorCode());
     }
@@ -92,7 +97,8 @@ class RegisterHandlerTest {
         RegisterCreatorRequest bad = new RegisterCreatorRequest(
                 "Test User", LocalDate.of(1990, 1, 1),
                 "+919876543210", "test@example.com", "Test Address",
-                "XXXX1234", "KYC-REF-001", true, 40,
+                "XXXX1234", "KYC-REF-001",
+                HIBP_PREFIX, HIBP_SUFFIX, true, 40,
                 "-----BEGIN PUBLIC KEY-----\ndata\n-----END PUBLIC KEY-----",
                 "fp", "enc==", "nonce==", "tag==", "a".repeat(64), 1, 12);
 
@@ -132,7 +138,8 @@ class RegisterHandlerTest {
         RegisterCreatorRequest bad = new RegisterCreatorRequest(
                 "Test User", LocalDate.of(1990, 1, 1),
                 "+919876543210", "test@example.com", "Test Address",
-                "XXXX1234", "KYC-REF-001", true, 80,
+                "XXXX1234", "KYC-REF-001",
+                HIBP_PREFIX, HIBP_SUFFIX, true, 80,
                 "-----BEGIN PUBLIC KEY-----\nMFkw\n-----END PUBLIC KEY-----",
                 "fp", "enc==", "nonce==", "tag==", "tooshort", 1, 12);
 
@@ -148,7 +155,8 @@ class RegisterHandlerTest {
         RegisterCreatorRequest bad = new RegisterCreatorRequest(
                 "Test User", LocalDate.of(1990, 1, 1),
                 "+919876543210", "test@example.com", "Test Address",
-                "XXXX1234", "KYC-REF-001", true, 80,
+                "XXXX1234", "KYC-REF-001",
+                HIBP_PREFIX, HIBP_SUFFIX, true, 80,
                 "-----BEGIN PUBLIC KEY-----\nMFkw\n-----END PUBLIC KEY-----",
                 "fp", "enc==", "nonce==", "tag==", "a".repeat(64), 1, 7);
 

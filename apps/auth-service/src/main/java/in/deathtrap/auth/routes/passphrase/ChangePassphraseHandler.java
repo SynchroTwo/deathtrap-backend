@@ -5,6 +5,7 @@ import in.deathtrap.auth.service.BlobRebuildNotifier;
 import in.deathtrap.common.audit.AuditWritePayload;
 import in.deathtrap.common.audit.AuditWriter;
 import in.deathtrap.common.crypto.CsprngUtil;
+import in.deathtrap.common.crypto.HibpClient;
 import in.deathtrap.common.db.DbClient;
 import in.deathtrap.common.errors.AppException;
 import in.deathtrap.common.errors.ErrorCode;
@@ -82,14 +83,16 @@ public class ChangePassphraseHandler {
     private final JwtService jwtService;
     private final AuditWriter auditWriter;
     private final BlobRebuildNotifier blobRebuildNotifier;
+    private final HibpClient hibpClient;
 
     /** Constructs ChangePassphraseHandler with required dependencies. */
     public ChangePassphraseHandler(DbClient dbClient, JwtService jwtService,
-            AuditWriter auditWriter, BlobRebuildNotifier blobRebuildNotifier) {
+            AuditWriter auditWriter, BlobRebuildNotifier blobRebuildNotifier, HibpClient hibpClient) {
         this.dbClient = dbClient;
         this.jwtService = jwtService;
         this.auditWriter = auditWriter;
         this.blobRebuildNotifier = blobRebuildNotifier;
+        this.hibpClient = hibpClient;
     }
 
     /** POST /auth/passphrase/change — rotates keypair and revokes all other sessions. */
@@ -115,9 +118,8 @@ public class ChangePassphraseHandler {
                     "OTP verification required before passphrase change");
         }
 
-        if (request.hibpCheckResult() == null || !request.hibpCheckResult()) {
-            throw AppException.passphraseCompromised();
-        }
+        hibpClient.checkPassphrase(request.hibpPrefix(), request.hibpSuffix(),
+                request.hibpCheckResult() != null && request.hibpCheckResult());
 
         validateRequest(request);
 

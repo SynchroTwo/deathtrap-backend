@@ -25,3 +25,12 @@ infra/dist/
 
 # Coverage
 coverage/
+
+# k6 load test results
+loadtest/results/
+
+# OWASP dependency check report (generated — not committed)
+**/dependency-check-report.html
+
+# Local secrets (NVD API key etc.)
+gradle.properties
