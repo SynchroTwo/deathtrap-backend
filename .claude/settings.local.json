@@ -14,7 +14,20 @@
       "Bash(./gradlew :apps:auth-service:test --tests \"in.deathtrap.auth.routes.nominee.InviteNomineeHandlerTest\" --info)",
       "Bash(./gradlew :apps:auth-service:checkstyle)",
       "Bash(./gradlew :apps:auth-service:checkstyleMain :apps:auth-service:checkstyleTest)",
-      "Bash(./gradlew :apps:auth-service:test :apps:auth-service:checkstyleMain :apps:auth-service:checkstyleTest)"
+      "Bash(./gradlew :apps:auth-service:test :apps:auth-service:checkstyleMain :apps:auth-service:checkstyleTest)",
+      "Bash(./gradlew :apps:locker-service:test --no-daemon)",
+      "Bash(export JAVA_HOME=\"C:/Program Files/Eclipse Adoptium/jdk-21.0.10\")",
+      "Bash(export JAVA_HOME=\"C:/Program Files/Java/jdk-21.0.10\")",
+      "PowerShell(java *)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-21.0.10\"; $env:PATH = \"$env:JAVA_HOME\\\\bin;$env:PATH\"; Set-Location \"D:\\\\Startups\\\\DeathTrap\\\\code\\\\deathtrap-backend\"; .\\\\gradlew :apps:locker-service:test --no-daemon 2>&1 | Select-Object -Last 100)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-21.0.10\"; $env:PATH = \"$env:JAVA_HOME\\\\bin;$env:PATH\"; Set-Location \"D:\\\\Startups\\\\DeathTrap\\\\code\\\\deathtrap-backend\"; .\\\\gradlew :apps:locker-service:test --no-daemon 2>&1 | Select-Object -Last 80)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-21.0.10\"; $env:PATH = \"$env:JAVA_HOME\\\\bin;$env:PATH\"; Set-Location \"D:\\\\Startups\\\\DeathTrap\\\\code\\\\deathtrap-backend\"; .\\\\gradlew :apps:locker-service:test --no-daemon --info 2>&1 | Select-String -Pattern \"\\(FAILED|PASSED|Exception|Error|UploadBlobHandler|SkipAsset|Completeness|notFound|Conflict\\)\" | Select-Object -First 60)",
+      "Bash(./gradlew :apps:locker-service:test *)",
+      "PowerShell(./gradlew :apps:locker-service:test 2>&1)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Eclipse Adoptium\\\\jdk-21.0.7.6-hotspot\"; $env:PATH = \"$env:JAVA_HOME\\\\bin;$env:PATH\"; .\\\\gradlew.bat :apps:locker-service:test 2>&1)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-21.0.10\"; $env:PATH = \"$env:JAVA_HOME\\\\bin;$env:PATH\"; .\\\\gradlew.bat :apps:locker-service:test 2>&1)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-21.0.10\"; $env:PATH = \"$env:JAVA_HOME\\\\bin;$env:PATH\"; .\\\\gradlew.bat :apps:locker-service:checkstyleMain :apps:locker-service:checkstyleTest 2>&1)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-21.0.10\"; $env:PATH = \"$env:JAVA_HOME\\\\bin;$env:PATH\"; .\\\\gradlew.bat :apps:auth-service:test 2>&1)"
     ]
   }
 }
