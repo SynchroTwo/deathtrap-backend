@@ -7,6 +7,7 @@ import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 /** Lambda entry point for the recovery service. */
 public class RecoveryHandler implements RequestHandler<AwsProxyRequest, AwsProxyResponse> {
     private static final Logger log = LoggerFactory.getLogger(RecoveryHandler.class);
@@ -16,5 +17,16 @@ public class RecoveryHandler implements RequestHandler<AwsProxyRequest, AwsProxy
         catch (ContainerInitializationException ex) { log.error("Cold start failed", ex); throw new RuntimeException("Cold start failed", ex); }
     }
     /** Delegates to Spring MVC dispatcher. */
-    @Override public AwsProxyResponse handleRequest(AwsProxyRequest input, Context context) { return HANDLER.proxy(input, context); }
+    @Override
+    public AwsProxyResponse handleRequest(AwsProxyRequest input, Context context) {
+        MDC.put("service", "recovery-service");
+        if (input.getRequestContext() != null) {
+            MDC.put("requestId", input.getRequestContext().getRequestId());
+        }
+        try {
+            return HANDLER.proxy(input, context);
+        } finally {
+            MDC.clear();
+        }
+    }
 }

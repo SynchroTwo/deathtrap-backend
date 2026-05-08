@@ -6,6 +6,9 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
 
 interface ApiStackProps extends cdk.StackProps {
@@ -193,5 +196,90 @@ export class ApiStack extends cdk.Stack {
     }
 
     new cdk.CfnOutput(this, 'ApiUrl', { value: api.url });
+
+    // ── CloudWatch Alarms ──────────────────────────────────────────────────
+    const notifyTopic = sns.Topic.fromTopicArn(this, 'NotifyTopicRef',
+      `arn:aws:sns:ap-south-1:${this.account}:deathtrap-${deployEnv}-notify`);
+
+    const authErrorAlarm = new cloudwatch.Alarm(this, 'AuthServiceErrors', {
+      metric: authFn.metricErrors({ period: cdk.Duration.minutes(5) }),
+      threshold: 10,
+      evaluationPeriods: 1,
+      alarmDescription: 'auth-service Lambda error rate exceeded threshold',
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    authErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(notifyTopic));
+
+    const lockerErrorAlarm = new cloudwatch.Alarm(this, 'LockerServiceErrors', {
+      metric: lockerFn.metricErrors({ period: cdk.Duration.minutes(5) }),
+      threshold: 5,
+      evaluationPeriods: 1,
+      alarmDescription: 'locker-service Lambda error rate exceeded threshold',
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    lockerErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(notifyTopic));
+
+    const recoveryErrorAlarm = new cloudwatch.Alarm(this, 'RecoveryServiceErrors', {
+      metric: recoveryFn.metricErrors({ period: cdk.Duration.minutes(5) }),
+      threshold: 3,
+      evaluationPeriods: 1,
+      alarmDescription: 'recovery-service Lambda error rate exceeded threshold (critical)',
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    recoveryErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(notifyTopic));
+
+    const dlqQueue = sqs.Queue.fromQueueUrl(this, 'TriggerDlqRef',
+      sqsTriggerUrl.replace('.fifo', '-dlq').replace(/\/([^\/]+)$/, '/dlq-$1'));
+    const sqsDlqAlarm = new cloudwatch.Alarm(this, 'SqsConsumerDLQ', {
+      metric: new cloudwatch.Metric({
+        namespace: 'AWS/SQS',
+        metricName: 'ApproximateNumberOfMessagesVisible',
+        dimensionsMap: { QueueName: dlqQueue.queueName },
+        period: cdk.Duration.minutes(1),
+        statistic: 'Maximum',
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      alarmDescription: 'SQS trigger DLQ has messages — immediate investigation required',
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    sqsDlqAlarm.addAlarmAction(new cloudwatchActions.SnsAction(notifyTopic));
+
+    const auditLogGroup = new logs.LogGroup(this, 'AuditServiceLogGroup', {
+      logGroupName: `/aws/lambda/deathtrap-${deployEnv}-auditservice`,
+      retention: logRetention,
+    });
+    const auditIntegrityFilter = new logs.MetricFilter(this, 'AuditIntegrityFilter', {
+      logGroup: auditLogGroup,
+      metricNamespace: 'DeathTrap/Audit',
+      metricName: 'IntegrityFailure',
+      filterPattern: logs.FilterPattern.literal('AUDIT_INTEGRITY_FAILURE'),
+      metricValue: '1',
+    });
+    const auditIntegrityAlarm = new cloudwatch.Alarm(this, 'AuditIntegrityFailure', {
+      metric: auditIntegrityFilter.metric({ period: cdk.Duration.hours(24) }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      alarmDescription: 'CRITICAL: Audit hash chain integrity failure detected',
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    auditIntegrityAlarm.addAlarmAction(new cloudwatchActions.SnsAction(notifyTopic));
+
+    const apiGateway5xxAlarm = new cloudwatch.Alarm(this, 'ApiGateway5xx', {
+      metric: new cloudwatch.Metric({
+        namespace: 'AWS/ApiGateway',
+        metricName: '5XXError',
+        dimensionsMap: { ApiName: `deathtrap-${deployEnv}-api` },
+        period: cdk.Duration.minutes(5),
+        statistic: 'Sum',
+      }),
+      threshold: 20,
+      evaluationPeriods: 1,
+      alarmDescription: 'API Gateway 5xx error rate exceeded threshold',
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    apiGateway5xxAlarm.addAlarmAction(new cloudwatchActions.SnsAction(notifyTopic));
   }
 }

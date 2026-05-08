@@ -8,6 +8,7 @@ import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 /** Lambda entry point for the trigger service. */
 public class TriggerHandler implements RequestHandler<AwsProxyRequest, AwsProxyResponse> {
@@ -24,6 +25,14 @@ public class TriggerHandler implements RequestHandler<AwsProxyRequest, AwsProxyR
     /** Delegates to Spring MVC dispatcher. */
     @Override
     public AwsProxyResponse handleRequest(AwsProxyRequest input, Context context) {
-        return HANDLER.proxy(input, context);
+        MDC.put("service", "trigger-service");
+        if (input.getRequestContext() != null) {
+            MDC.put("requestId", input.getRequestContext().getRequestId());
+        }
+        try {
+            return HANDLER.proxy(input, context);
+        } finally {
+            MDC.clear();
+        }
     }
 }

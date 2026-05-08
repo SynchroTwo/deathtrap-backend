@@ -8,6 +8,7 @@ import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 /** Lambda entry point — lazily initialises the Spring context on first invocation. */
 public class AuthHandler implements RequestHandler<AwsProxyRequest, AwsProxyResponse> {
@@ -29,6 +30,14 @@ public class AuthHandler implements RequestHandler<AwsProxyRequest, AwsProxyResp
     /** Handles an API Gateway proxy request by delegating to the Spring MVC dispatcher. */
     @Override
     public AwsProxyResponse handleRequest(AwsProxyRequest input, Context context) {
-        return HANDLER.proxy(input, context);
+        MDC.put("service", "auth-service");
+        if (input.getRequestContext() != null) {
+            MDC.put("requestId", input.getRequestContext().getRequestId());
+        }
+        try {
+            return HANDLER.proxy(input, context);
+        } finally {
+            MDC.clear();
+        }
     }
 }
