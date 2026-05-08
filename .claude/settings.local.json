@@ -4,7 +4,17 @@
       "Bash(./gradlew :apps:auth-service:test --tests in.deathtrap.auth.service.OtpServiceTest)",
       "Bash(./gradlew :apps:auth-service:test --tests in.deathtrap.auth.service.OtpServiceTest --tests in.deathtrap.auth.routes.otp.VerifyOtpHandlerTest)",
       "Bash(./gradlew :apps:auth-service:test)",
-      "Bash(./gradlew :apps:auth-service:build :packages:common-crypto:checkstyleMain)"
+      "Bash(./gradlew :apps:auth-service:build :packages:common-crypto:checkstyleMain)",
+      "Bash(./gradlew :apps:auth-service:test --tests \"in.deathtrap.auth.routes.nominee.*\" --tests \"in.deathtrap.auth.routes.lawyer.*\" --tests \"in.deathtrap.auth.routes.passphrase.*\")",
+      "PowerShell(Get-ItemProperty *)",
+      "Bash(export JAVA_HOME=\"/c/Program Files/Java/jdk-21.0.10\")",
+      "Bash(export PATH=\"$JAVA_HOME/bin:$PATH\")",
+      "Bash(java -version)",
+      "Bash(./gradlew :apps:auth-service:test --tests \"in.deathtrap.auth.routes.nominee.InviteNomineeHandlerTest\")",
+      "Bash(./gradlew :apps:auth-service:test --tests \"in.deathtrap.auth.routes.nominee.InviteNomineeHandlerTest\" --info)",
+      "Bash(./gradlew :apps:auth-service:checkstyle)",
+      "Bash(./gradlew :apps:auth-service:checkstyleMain :apps:auth-service:checkstyleTest)",
+      "Bash(./gradlew :apps:auth-service:test :apps:auth-service:checkstyleMain :apps:auth-service:checkstyleTest)"
     ]
   }
 }

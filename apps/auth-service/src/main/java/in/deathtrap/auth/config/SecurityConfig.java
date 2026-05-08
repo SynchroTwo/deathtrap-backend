@@ -9,6 +9,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ses.SesClient;
 import software.amazon.awssdk.services.sns.SnsClient;
+import software.amazon.awssdk.services.sqs.SqsClient;
 
 /** Wires JWT, AWS SDK, and transaction infrastructure beans. */
 @Configuration
@@ -43,6 +44,14 @@ public class SecurityConfig {
         String region = System.getenv("AWS_REGION");
         if (region == null || region.isBlank()) { region = "ap-south-1"; }
         return SesClient.builder().region(Region.of(region)).build();
+    }
+
+    /** Creates the AWS SQS client bean. */
+    @Bean
+    public SqsClient sqsClient() {
+        String region = System.getenv("AWS_REGION");
+        if (region == null || region.isBlank()) { region = "ap-south-1"; }
+        return SqsClient.builder().region(Region.of(region)).build();
     }
 
     /** Exposes TransactionTemplate so DbClient can perform declarative transactions. */

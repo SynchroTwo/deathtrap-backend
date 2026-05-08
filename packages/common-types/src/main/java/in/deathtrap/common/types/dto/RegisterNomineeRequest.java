@@ -1,16 +1,16 @@
 package in.deathtrap.common.types.dto;
 
-import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.NotBlank;
 
 /** Request body for POST /auth/nominee/register. */
 public record RegisterNomineeRequest(
-        @NotNull String inviteToken,
-        @NotNull String fullName,
-        @NotNull String mobile,
-        @NotNull String email,
-        @NotNull String publicKeyPem,
-        @NotNull String encryptedPrivkeyB64,
-        @NotNull String nonceB64,
-        @NotNull String authTagB64,
-        @NotNull String saltHex
+        @NotBlank String inviteToken,
+        @NotBlank String saltHex,
+        @NotBlank String publicKeyPem,
+        @NotBlank String keyFingerprint,
+        @NotBlank String encryptedPrivkeyB64,
+        @NotBlank String nonceB64,
+        @NotBlank String authTagB64,
+        String deviceId,
+        String deviceFingerprint
 ) {}

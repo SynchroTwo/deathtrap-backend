@@ -21,6 +21,7 @@ dependencies {
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.5")
     implementation("software.amazon.awssdk:sns:2.25.31")
     implementation("software.amazon.awssdk:ses:2.25.31")
+    implementation("software.amazon.awssdk:sqs:2.25.31")
     compileOnly("org.projectlombok:lombok")
     annotationProcessor("org.projectlombok:lombok")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
