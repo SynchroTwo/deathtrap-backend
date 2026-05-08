@@ -37,7 +37,14 @@
       "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-21.0.10\"; $env:PATH = \"$env:JAVA_HOME\\\\bin;$env:PATH\"; .\\\\gradlew :apps:recovery-service:checkstyleMain :apps:recovery-service:checkstyleTest --no-daemon 2>&1 | Select-Object -Last 20)",
       "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-21.0.10\"; $env:PATH = \"$env:JAVA_HOME\\\\bin;$env:PATH\"; .\\\\gradlew :apps:recovery-service:checkstyleMain --no-daemon 2>&1 | Select-String \"WARN\")",
       "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-21.0.10\"; $env:PATH = \"$env:JAVA_HOME\\\\bin;$env:PATH\"; .\\\\gradlew :apps:recovery-service:checkstyleMain :apps:recovery-service:checkstyleTest :apps:recovery-service:test --no-daemon 2>&1 | Select-Object -Last 20)",
-      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-21.0.10\"; $env:PATH = \"$env:JAVA_HOME\\\\bin;$env:PATH\"; .\\\\gradlew :apps:locker-service:test :apps:auth-service:test --no-daemon 2>&1 | Select-Object -Last 20)"
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-21.0.10\"; $env:PATH = \"$env:JAVA_HOME\\\\bin;$env:PATH\"; .\\\\gradlew :apps:locker-service:test :apps:auth-service:test --no-daemon 2>&1 | Select-Object -Last 20)",
+      "Bash(./gradlew :apps:trigger-service:test --no-daemon)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Eclipse Adoptium\\\\jdk-21.0.6.7-hotspot\"; $env:PATH = \"$env:JAVA_HOME\\\\bin;$env:PATH\"; .\\\\gradlew.bat :apps:trigger-service:test --no-daemon 2>&1 | Select-Object -Last 80)",
+      "PowerShell(where.exe java 2>$null; [System.Environment]::GetEnvironmentVariable\\(\"JAVA_HOME\", \"Machine\"\\); [System.Environment]::GetEnvironmentVariable\\(\"JAVA_HOME\", \"User\"\\))",
+      "PowerShell(cmd /c \"where java 2>&1\")",
+      "Bash(./gradlew build *)",
+      "Bash(./gradlew :apps:sqs-consumer:checkstyleMain :apps:sqs-consumer:checkstyleTest)",
+      "Bash(./gradlew :apps:trigger-service:checkstyleMain)"
     ]
   }
 }
