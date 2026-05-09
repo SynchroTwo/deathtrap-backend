@@ -1,5 +1,5 @@
 plugins {
-    id("org.springframework.boot") version "3.2.5" apply false
+    id("org.springframework.boot") version "3.5.6" apply false
     id("io.spring.dependency-management") version "1.1.4" apply false
     id("org.owasp.dependencycheck") version "12.1.0" apply false
 }
@@ -24,6 +24,8 @@ allprojects {
         }
         // OSS Index requires a separate Sonatype account — disable it, NVD is sufficient
         analyzers.ossIndexEnabled = false
+        // Checkstyle is a build tool — its transitive deps are never deployed to Lambda
+        skipConfigurations = listOf("checkstyle")
     }
 }
 
@@ -40,11 +42,16 @@ subprojects {
 
     extensions.configure<io.spring.gradle.dependencymanagement.dsl.DependencyManagementExtension> {
         imports {
-            mavenBom("org.springframework.boot:spring-boot-dependencies:3.2.5")
+            mavenBom("org.springframework.boot:spring-boot-dependencies:3.5.6")
+        }
+        dependencies {
+            // CVE-2026-42198, CVE-2025-49146: upgrade postgresql beyond Spring Boot 3.5.6 BOM version
+            dependency("org.postgresql:postgresql:42.7.5")
         }
     }
 
     extensions.configure<CheckstyleExtension> {
+        toolVersion = "10.21.0"
         maxWarnings = 0
     }
 
