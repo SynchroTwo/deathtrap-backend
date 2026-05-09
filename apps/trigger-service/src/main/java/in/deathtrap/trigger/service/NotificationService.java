@@ -36,6 +36,9 @@ public class NotificationService {
     @Value("${SNS_NOTIFY_ARN:}")
     private String snsNotifyArn;
 
+    @Value("${ENVIRONMENT:local}")
+    private String environment;
+
     /** Constructs NotificationService with required dependencies. */
     public NotificationService(DbClient db, SnsClient snsClient) {
         this.db = db;
@@ -64,8 +67,9 @@ public class NotificationService {
     /** Publishes an admin action-required notification to the SNS admin topic. Never throws. */
     public void notifyAdminThresholdMet(String creatorId, String triggerId) {
         try {
-            if (snsNotifyArn == null || snsNotifyArn.isBlank()) {
-                log.warn("[DEV] Admin threshold notification skipped: creatorId={} triggerId={}",
+            if (snsNotifyArn == null || snsNotifyArn.isBlank()
+                    || "local".equals(environment) || "staging".equals(environment)) {
+                log.warn("[DEV/STAGING] Admin threshold notification skipped: creatorId={} triggerId={}",
                         creatorId, triggerId);
                 return;
             }
@@ -121,8 +125,9 @@ public class NotificationService {
     }
 
     private void publishSms(String phoneNumber, String message) {
-        if (snsNotifyArn == null || snsNotifyArn.isBlank()) {
-            log.warn("[DEV] SMS skipped: to={} message={}", phoneNumber, message);
+        if (snsNotifyArn == null || snsNotifyArn.isBlank()
+                || "local".equals(environment) || "staging".equals(environment)) {
+            log.warn("[DEV/STAGING] SMS skipped: to={} message={}", phoneNumber, message);
             return;
         }
         snsClient.publish(PublishRequest.builder()

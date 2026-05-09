@@ -17,6 +17,9 @@ public class BlobRebuildNotifier {
     @Value("${SQS_TRIGGER_URL:}")
     private String sqsTriggerUrl;
 
+    @Value("${ENVIRONMENT:local}")
+    private String environment;
+
     /** Constructs BlobRebuildNotifier with the AWS SQS client. */
     public BlobRebuildNotifier(SqsClient sqsClient) {
         this.sqsClient = sqsClient;
@@ -24,8 +27,9 @@ public class BlobRebuildNotifier {
 
     /** Sends a blob rebuild notification to SQS. Non-blocking: logs and returns if SQS not configured or send fails. */
     public void notifyRebuildRequired(String creatorId, String reason, String partyId, String partyType) {
-        if (sqsTriggerUrl == null || sqsTriggerUrl.isBlank()) {
-            log.warn("[DEV] Blob rebuild required: creatorId={} reason={} partyId={}", creatorId, reason, partyId);
+        if (sqsTriggerUrl == null || sqsTriggerUrl.isBlank()
+                || "staging".equals(environment)) {
+            log.warn("[DEV/STAGING] Blob rebuild required: creatorId={}", creatorId);
             return;
         }
         try {
