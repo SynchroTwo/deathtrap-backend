@@ -20,6 +20,8 @@ interface ApiStackProps extends cdk.StackProps {
   dbSecretArn: string;
   s3BucketName: string;
   sqsTriggerUrl: string;
+  sqsTriggerArn: string;
+  sqsTriggerDlqArn: string;
   snsNotifyArn: string;
   kmsKeyId: string;
 }
@@ -31,7 +33,7 @@ export class ApiStack extends cdk.Stack {
 
     const {
       deployEnv, vpc, lambdaSecurityGroup,
-      dbSecretArn, s3BucketName, sqsTriggerUrl, snsNotifyArn, kmsKeyId,
+      dbSecretArn, s3BucketName, sqsTriggerUrl, sqsTriggerArn, sqsTriggerDlqArn, snsNotifyArn, kmsKeyId,
     } = props;
     const config = getConfig(deployEnv);
     const isProd = config.environment === 'prod';
@@ -48,7 +50,7 @@ export class ApiStack extends cdk.Stack {
       KMS_KEY_ID: kmsKeyId,
     };
 
-    const lambdaDefaults: Partial<lambda.FunctionProps> = {
+    const lambdaDefaults = {
       runtime: lambda.Runtime.JAVA_21,
       architecture: lambda.Architecture.ARM_64,
       vpc,
@@ -154,12 +156,12 @@ export class ApiStack extends cdk.Stack {
     // IAM: SQS send for trigger
     triggerFn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['sqs:SendMessage'],
-      resources: [sqs.Queue.fromQueueUrl(this, 'TriggerQueueRef', sqsTriggerUrl).queueArn],
+      resources: [sqsTriggerArn],
     }));
 
     // SQS event source mapping for sqs-consumer
     sqsConsumerFn.addEventSource(new lambdaEventSources.SqsEventSource(
-      sqs.Queue.fromQueueUrl(this, 'TriggerQueueConsumerRef', sqsTriggerUrl),
+      sqs.Queue.fromQueueArn(this, 'TriggerQueueConsumerRef', sqsTriggerArn),
       { batchSize: 1, enabled: true },
     ));
 
@@ -266,8 +268,7 @@ export class ApiStack extends cdk.Stack {
     });
     recoveryErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(notifyTopic));
 
-    const dlqQueue = sqs.Queue.fromQueueUrl(this, 'TriggerDlqRef',
-      sqsTriggerUrl.replace('.fifo', '-dlq').replace(/\/([^\/]+)$/, '/dlq-$1'));
+    const dlqQueue = sqs.Queue.fromQueueArn(this, 'TriggerDlqRef', sqsTriggerDlqArn);
     const sqsDlqAlarm = new cloudwatch.Alarm(this, 'SqsConsumerDLQ', {
       metric: new cloudwatch.Metric({
         namespace: 'AWS/SQS',

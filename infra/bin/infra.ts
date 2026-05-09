@@ -51,6 +51,8 @@ const apiStack = new ApiStack(app, `DeathTrap-Api-${env}`, {
   dbSecretArn: dataStack.dbSecretArn,
   s3BucketName: dataStack.s3BucketName,
   sqsTriggerUrl: dataStack.sqsTriggerUrl,
+  sqsTriggerArn: dataStack.sqsTriggerArn,
+  sqsTriggerDlqArn: dataStack.sqsTriggerDlqArn,
   snsNotifyArn: dataStack.snsNotifyArn,
   kmsKeyId: dataStack.kmsKeyId,
   tags: commonTags,

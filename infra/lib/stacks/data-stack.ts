@@ -20,6 +20,8 @@ export class DataStack extends cdk.Stack {
   public readonly dbSecretArn: string;
   public readonly s3BucketName: string;
   public readonly sqsTriggerUrl: string;
+  public readonly sqsTriggerArn: string;
+  public readonly sqsTriggerDlqArn: string;
   public readonly snsNotifyArn: string;
   public readonly kmsKeyId: string;
 
@@ -96,6 +98,8 @@ export class DataStack extends cdk.Stack {
       deadLetterQueue: { queue: dlq, maxReceiveCount: 3 },
     });
     this.sqsTriggerUrl = triggerQueue.queueUrl;
+    this.sqsTriggerArn = triggerQueue.queueArn;
+    this.sqsTriggerDlqArn = dlq.queueArn;
 
     // SNS notification topic
     const snsTopic = new sns.Topic(this, 'NotifyTopic', {
