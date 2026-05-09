@@ -6,6 +6,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
+import { getConfig } from '../config';
 
 interface DataStackProps extends cdk.StackProps {
   deployEnv: string;
@@ -26,7 +27,8 @@ export class DataStack extends cdk.Stack {
     super(scope, id, props);
 
     const { deployEnv, vpc, dbSecurityGroup } = props;
-    const isProd = deployEnv === 'prod';
+    const config = getConfig(deployEnv);
+    const isProd = config.environment === 'prod';
 
     // KMS CMK with annual rotation
     const kmsKey = new kms.Key(this, 'DeathTrapKmsKey', {
@@ -41,12 +43,12 @@ export class DataStack extends cdk.Stack {
       engine: rds.DatabaseClusterEngine.auroraPostgres({
         version: rds.AuroraPostgresEngineVersion.VER_15_4,
       }),
-      serverlessV2MinCapacity: 0.5,
-      serverlessV2MaxCapacity: isProd ? 32 : 4,
+      serverlessV2MinCapacity: config.auroraMinAcu,
+      serverlessV2MaxCapacity: config.auroraMaxAcu,
       writer: rds.ClusterInstance.serverlessV2('Writer', {
         scaleWithWriter: true,
       }),
-      readers: isProd
+      readers: config.auroraInstances > 1
         ? [rds.ClusterInstance.serverlessV2('Reader', { scaleWithWriter: false })]
         : [],
       vpc,
@@ -54,8 +56,8 @@ export class DataStack extends cdk.Stack {
       securityGroups: [dbSecurityGroup],
       storageEncrypted: true,
       storageEncryptionKey: kmsKey,
-      backup: { retention: cdk.Duration.days(isProd ? 35 : 7) },
-      deletionProtection: isProd,
+      backup: { retention: cdk.Duration.days(config.auroraBackupDays) },
+      deletionProtection: config.deletionProtection,
       removalPolicy: isProd ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
       defaultDatabaseName: 'deathtrap',
     });
@@ -63,7 +65,7 @@ export class DataStack extends cdk.Stack {
 
     // S3 bucket for encrypted blobs
     const bucket = new s3.Bucket(this, 'DeathTrapBucket', {
-      bucketName: `deathtrap-${deployEnv}`,
+      bucketName: config.bucketName,
       encryption: s3.BucketEncryption.KMS,
       encryptionKey: kmsKey,
       versioned: true,

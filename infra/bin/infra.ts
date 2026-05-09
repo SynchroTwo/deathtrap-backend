@@ -7,11 +7,13 @@ import { ApiStack } from '../lib/stacks/api-stack';
 const app = new cdk.App();
 
 const env = app.node.tryGetContext('env') as string;
-if (!env || !['dev', 'prod'].includes(env)) {
-  throw new Error("Context variable 'env' must be 'dev' or 'prod'. Pass --context env=dev");
+if (!env || !['dev', 'staging', 'prod'].includes(env)) {
+  throw new Error("Context variable 'env' must be 'dev', 'staging', or 'prod'. Pass --context env=staging");
 }
 
-const accountEnvVar = env === 'prod' ? 'AWS_ACCOUNT_PROD' : 'AWS_ACCOUNT_DEV';
+const accountEnvVar = env === 'prod' ? 'AWS_ACCOUNT_PROD'
+  : env === 'staging' ? 'AWS_ACCOUNT_STAGING'
+  : 'AWS_ACCOUNT_DEV';
 const account = process.env[accountEnvVar];
 if (!account) {
   throw new Error(`Environment variable ${accountEnvVar} is required`);

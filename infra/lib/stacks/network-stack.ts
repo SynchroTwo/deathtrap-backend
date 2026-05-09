@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs';
+import { getConfig } from '../config';
 
 interface NetworkStackProps extends cdk.StackProps {
   deployEnv: string;
@@ -16,11 +17,12 @@ export class NetworkStack extends cdk.Stack {
     super(scope, id, props);
 
     const { deployEnv } = props;
-    const isProd = deployEnv === 'prod';
+    const config = getConfig(deployEnv);
+    const isProd = config.environment === 'prod';
 
     this.vpc = new ec2.Vpc(this, 'Vpc', {
       maxAzs: isProd ? 3 : 2,
-      natGateways: isProd ? 3 : 1,
+      natGateways: config.natGateways,
       subnetConfiguration: [
         {
           name: 'Public',

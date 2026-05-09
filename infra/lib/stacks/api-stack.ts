@@ -9,7 +9,9 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as sns from 'aws-cdk-lib/aws-sns';
+import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import { Construct } from 'constructs';
+import { getConfig } from '../config';
 
 interface ApiStackProps extends cdk.StackProps {
   deployEnv: string;
@@ -31,15 +33,16 @@ export class ApiStack extends cdk.Stack {
       deployEnv, vpc, lambdaSecurityGroup,
       dbSecretArn, s3BucketName, sqsTriggerUrl, snsNotifyArn, kmsKeyId,
     } = props;
-    const isProd = deployEnv === 'prod';
+    const config = getConfig(deployEnv);
+    const isProd = config.environment === 'prod';
 
-    const logRetention = isProd
+    const logRetention = config.logRetentionDays === 30
       ? logs.RetentionDays.ONE_MONTH
       : logs.RetentionDays.ONE_WEEK;
 
     const commonEnv: Record<string, string> = {
       DB_SECRET_ARN: dbSecretArn,
-      ENVIRONMENT: deployEnv,
+      ENVIRONMENT: config.environment,
       LOG_LEVEL: isProd ? 'INFO' : 'DEBUG',
       S3_BUCKET_NAME: s3BucketName,
       KMS_KEY_ID: kmsKeyId,
@@ -61,7 +64,7 @@ export class ApiStack extends cdk.Stack {
       handler: string,
       memorySize: number,
       timeout: cdk.Duration,
-      reservedConcurrency: number,
+      reservedConcurrency: number | undefined,
       env: Record<string, string>,
     ): lambda.Function => {
       const fn = new lambda.Function(this, name, {
@@ -84,39 +87,39 @@ export class ApiStack extends cdk.Stack {
     const authFn = createLambda(
       'AuthService', '../apps/auth-service/build/libs/auth-service-1.0.0-all.jar',
       'in.deathtrap.auth.AuthHandler::handleRequest',
-      256, cdk.Duration.seconds(15), isProd ? 50 : 10,
+      256, cdk.Duration.seconds(15), config.authConcurrency,
       { JWT_SECRET_ARN: `arn:aws:secretsmanager:ap-south-1:${this.account}:secret:deathtrap/${deployEnv}/jwt-secret` },
     );
 
     const lockerFn = createLambda(
       'LockerService', '../apps/locker-service/build/libs/locker-service-1.0.0-all.jar',
       'in.deathtrap.locker.LockerHandler::handleRequest',
-      512, cdk.Duration.seconds(30), isProd ? 100 : 20, {},
+      512, cdk.Duration.seconds(30), config.lockerConcurrency, {},
     );
 
     const recoveryFn = createLambda(
       'RecoveryService', '../apps/recovery-service/build/libs/recovery-service-1.0.0-all.jar',
       'in.deathtrap.recovery.RecoveryHandler::handleRequest',
-      256, cdk.Duration.seconds(30), isProd ? 20 : 5, {},
+      256, cdk.Duration.seconds(30), config.recoveryConcurrency, {},
     );
 
     const triggerFn = createLambda(
       'TriggerService', '../apps/trigger-service/build/libs/trigger-service-1.0.0-all.jar',
       'in.deathtrap.trigger.TriggerHandler::handleRequest',
-      256, cdk.Duration.seconds(60), isProd ? 10 : 3,
+      256, cdk.Duration.seconds(60), config.triggerConcurrency,
       { SQS_TRIGGER_URL: sqsTriggerUrl, SNS_NOTIFY_ARN: snsNotifyArn },
     );
 
     const auditFn = createLambda(
       'AuditService', '../apps/audit-service/build/libs/audit-service-1.0.0-all.jar',
       'in.deathtrap.audit.AuditHandler::handleRequest',
-      128, cdk.Duration.seconds(15), isProd ? 20 : 5, {},
+      128, cdk.Duration.seconds(15), config.auditConcurrency, {},
     );
 
     const sqsConsumerFn = createLambda(
       'SqsConsumer', '../apps/sqs-consumer/build/libs/sqs-consumer-1.0.0-all.jar',
       'in.deathtrap.sqsconsumer.SqsConsumerHandler::handleRequest',
-      256, cdk.Duration.seconds(120), isProd ? 5 : 2,
+      256, cdk.Duration.seconds(120), config.sqsConcurrency,
       { SQS_TRIGGER_URL: sqsTriggerUrl, SNS_NOTIFY_ARN: snsNotifyArn },
     );
 
@@ -196,6 +199,41 @@ export class ApiStack extends cdk.Stack {
     }
 
     new cdk.CfnOutput(this, 'ApiUrl', { value: api.url });
+
+    // WAF WebACL — enabled in prod only
+    if (config.enableWaf) {
+      const webAcl = new wafv2.CfnWebACL(this, 'ApiWebAcl', {
+        defaultAction: { allow: {} },
+        scope: 'REGIONAL',
+        visibilityConfig: {
+          cloudWatchMetricsEnabled: true,
+          metricName: `deathtrap-${deployEnv}-waf`,
+          sampledRequestsEnabled: true,
+        },
+        rules: [
+          {
+            name: 'AWSManagedRulesCommonRuleSet',
+            priority: 1,
+            overrideAction: { none: {} },
+            statement: {
+              managedRuleGroupStatement: {
+                vendorName: 'AWS',
+                name: 'AWSManagedRulesCommonRuleSet',
+              },
+            },
+            visibilityConfig: {
+              cloudWatchMetricsEnabled: true,
+              metricName: 'AWSManagedRulesCommonRuleSetMetric',
+              sampledRequestsEnabled: true,
+            },
+          },
+        ],
+      });
+      new wafv2.CfnWebACLAssociation(this, 'ApiWebAclAssociation', {
+        resourceArn: `arn:aws:apigateway:ap-south-1::/restapis/${api.restApiId}/stages/${api.deploymentStage.stageName}`,
+        webAclArn: webAcl.attrArn,
+      });
+    }
 
     // ── CloudWatch Alarms ──────────────────────────────────────────────────
     const notifyTopic = sns.Topic.fromTopicArn(this, 'NotifyTopicRef',
