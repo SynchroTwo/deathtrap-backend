@@ -69,6 +69,10 @@ export class ApiStack extends cdk.Stack {
       reservedConcurrency: number | undefined,
       env: Record<string, string>,
     ): lambda.Function => {
+      const logGroup = new logs.LogGroup(this, `${name}LogGroup`, {
+        retention: logRetention,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      });
       const fn = new lambda.Function(this, name, {
         ...lambdaDefaults,
         functionName: `deathtrap-${deployEnv}-${name.toLowerCase()}`,
@@ -78,7 +82,7 @@ export class ApiStack extends cdk.Stack {
         timeout,
         reservedConcurrentExecutions: reservedConcurrency,
         environment: { ...commonEnv, ...env },
-        logRetention,
+        logGroup,
       });
       // Enable SnapStart on published version
       const cfnFn = fn.node.defaultChild as lambda.CfnFunction;
