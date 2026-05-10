@@ -16,6 +16,8 @@ export interface DeathTrapConfig {
   sqsConcurrency: number | undefined;
   logRetentionDays: number;
   environment: string;
+  jarBucketName: string;
+  jarPrefix: string;
 }
 
 export function getConfig(env: string): DeathTrapConfig {
@@ -38,5 +40,7 @@ export function getConfig(env: string): DeathTrapConfig {
     sqsConcurrency:      isProd ? 5   : undefined,
     logRetentionDays:    isProd ? 30  : 7,
     environment:         env,
+    jarBucketName:       isProd ? 'deathtrap-prod-jars' : 'deathtrap-staging-jars',
+    jarPrefix:           'lambda-jars/',
   };
 }

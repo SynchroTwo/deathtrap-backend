@@ -5,6 +5,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
@@ -50,6 +51,8 @@ export class ApiStack extends cdk.Stack {
       KMS_KEY_ID: kmsKeyId,
     };
 
+    const jarBucket = s3.Bucket.fromBucketName(this, 'JarBucket', config.jarBucketName);
+
     const lambdaDefaults = {
       runtime: lambda.Runtime.JAVA_21,
       architecture: lambda.Architecture.ARM_64,
@@ -62,7 +65,7 @@ export class ApiStack extends cdk.Stack {
     // Helper to create a Lambda function with SnapStart
     const createLambda = (
       name: string,
-      jarPath: string,
+      jarKey: string,
       handler: string,
       memorySize: number,
       timeout: cdk.Duration,
@@ -76,7 +79,7 @@ export class ApiStack extends cdk.Stack {
       const fn = new lambda.Function(this, name, {
         ...lambdaDefaults,
         functionName: `deathtrap-${deployEnv}-${name.toLowerCase()}`,
-        code: lambda.Code.fromAsset(jarPath),
+        code: lambda.Code.fromBucket(jarBucket, jarKey),
         handler,
         memorySize,
         timeout,
@@ -91,43 +94,47 @@ export class ApiStack extends cdk.Stack {
     };
 
     const authFn = createLambda(
-      'AuthService', '../apps/auth-service/build/libs/auth-service-1.0.0-all.jar',
+      'AuthService', `${config.jarPrefix}auth-service-1.0.0-all.jar`,
       'in.deathtrap.auth.AuthHandler::handleRequest',
       256, cdk.Duration.seconds(15), config.authConcurrency,
       { JWT_SECRET_ARN: `arn:aws:secretsmanager:ap-south-1:${this.account}:secret:deathtrap/${deployEnv}/jwt-secret` },
     );
 
     const lockerFn = createLambda(
-      'LockerService', '../apps/locker-service/build/libs/locker-service-1.0.0-all.jar',
+      'LockerService', `${config.jarPrefix}locker-service-1.0.0-all.jar`,
       'in.deathtrap.locker.LockerHandler::handleRequest',
       512, cdk.Duration.seconds(30), config.lockerConcurrency, {},
     );
 
     const recoveryFn = createLambda(
-      'RecoveryService', '../apps/recovery-service/build/libs/recovery-service-1.0.0-all.jar',
+      'RecoveryService', `${config.jarPrefix}recovery-service-1.0.0-all.jar`,
       'in.deathtrap.recovery.RecoveryHandler::handleRequest',
       256, cdk.Duration.seconds(30), config.recoveryConcurrency, {},
     );
 
     const triggerFn = createLambda(
-      'TriggerService', '../apps/trigger-service/build/libs/trigger-service-1.0.0-all.jar',
+      'TriggerService', `${config.jarPrefix}trigger-service-1.0.0-all.jar`,
       'in.deathtrap.trigger.TriggerHandler::handleRequest',
       256, cdk.Duration.seconds(60), config.triggerConcurrency,
       { SQS_TRIGGER_URL: sqsTriggerUrl, SNS_NOTIFY_ARN: snsNotifyArn },
     );
 
     const auditFn = createLambda(
-      'AuditService', '../apps/audit-service/build/libs/audit-service-1.0.0-all.jar',
+      'AuditService', `${config.jarPrefix}audit-service-1.0.0-all.jar`,
       'in.deathtrap.audit.AuditHandler::handleRequest',
       128, cdk.Duration.seconds(15), config.auditConcurrency, {},
     );
 
     const sqsConsumerFn = createLambda(
-      'SqsConsumer', '../apps/sqs-consumer/build/libs/sqs-consumer-1.0.0-all.jar',
+      'SqsConsumer', `${config.jarPrefix}sqs-consumer-1.0.0-all.jar`,
       'in.deathtrap.sqsconsumer.SqsConsumerHandler::handleRequest',
       256, cdk.Duration.seconds(120), config.sqsConcurrency,
       { SQS_TRIGGER_URL: sqsTriggerUrl, SNS_NOTIFY_ARN: snsNotifyArn },
     );
+
+    // IAM: JAR bucket read access for all functions
+    [authFn, lockerFn, recoveryFn, triggerFn, auditFn, sqsConsumerFn]
+      .forEach(fn => jarBucket.grantRead(fn));
 
     // IAM: Secrets Manager access for all functions
     const secretPolicy = new iam.PolicyStatement({

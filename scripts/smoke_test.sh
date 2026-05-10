@@ -1,9 +1,9 @@
 #!/bin/bash
-# Run from CloudShell.
+# Run from CloudShell or LOCAL.
 # Usage: BASE_URL=https://XXXX.execute-api.ap-south-1.amazonaws.com/staging \
 #        bash scripts/smoke_test.sh
 set -euo pipefail
-BASE="${BASE_URL:?Set BASE_URL env var to your API Gateway endpoint}"
+BASE="${BASE_URL:?Set BASE_URL to your API Gateway endpoint}"
 PASS=0; FAIL=0
 
 check() {
@@ -20,7 +20,7 @@ for svc in auth locker recovery trigger audit; do
     $(curl -sf -o /dev/null -w "%{http_code}" $BASE/${svc}/health)
 done
 
-echo "-- Unauthenticated → must return 401 --"
+echo "-- Unauthenticated must return 401 --"
 check "GET /locker/sync no auth"      401 $(curl -sf -o /dev/null -w "%{http_code}" $BASE/locker/sync)
 check "GET /recovery/blob no auth"    401 $(curl -sf -o /dev/null -w "%{http_code}" $BASE/recovery/blob)
 check "POST /trigger/checkin no auth" 401 $(curl -sf -o /dev/null -w "%{http_code}" -X POST $BASE/trigger/checkin)
@@ -30,7 +30,7 @@ echo "-- OTP send (log mode) --"
 R=$(curl -sf -o /dev/null -w "%{http_code}" -X POST $BASE/auth/otp/send \
   -H "Content-Type: application/json" \
   -d '{"mobile":"+919999999990","purpose":"registration"}')
-check "POST /auth/otp/send → 200" "200" "$R"
+check "POST /auth/otp/send" "200" "$R"
 
 echo "-- Security headers --"
 H=$(curl -sI -X POST $BASE/auth/otp/send -H "Content-Type: application/json" -d '{}')
