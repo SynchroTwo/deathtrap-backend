@@ -296,12 +296,8 @@ export class ApiStack extends cdk.Stack {
     });
     sqsDlqAlarm.addAlarmAction(new cloudwatchActions.SnsAction(notifyTopic));
 
-    const auditLogGroup = new logs.LogGroup(this, 'AuditServiceLogGroup', {
-      logGroupName: `/aws/lambda/deathtrap-${deployEnv}-auditservice`,
-      retention: logRetention,
-    });
     const auditIntegrityFilter = new logs.MetricFilter(this, 'AuditIntegrityFilter', {
-      logGroup: auditLogGroup,
+      logGroup: auditFn.logGroup,
       metricNamespace: 'DeathTrap/Audit',
       metricName: 'IntegrityFailure',
       filterPattern: logs.FilterPattern.literal('AUDIT_INTEGRITY_FAILURE'),
