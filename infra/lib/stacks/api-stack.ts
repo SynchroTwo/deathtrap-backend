@@ -72,13 +72,16 @@ export class ApiStack extends cdk.Stack {
       reservedConcurrency: number | undefined,
       env: Record<string, string>,
     ): lambda.Function => {
+      const kebabName = name.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+      const functionName = `deathtrap-${deployEnv}-${kebabName}`;
       const logGroup = new logs.LogGroup(this, `${name}LogGroup`, {
+        logGroupName: `/aws/lambda/${functionName}`,
         retention: logRetention,
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       });
       const fn = new lambda.Function(this, name, {
         ...lambdaDefaults,
-        functionName: `deathtrap-${deployEnv}-${name.toLowerCase()}`,
+        functionName,
         code: lambda.Code.fromBucket(jarBucket, jarKey),
         handler,
         memorySize,

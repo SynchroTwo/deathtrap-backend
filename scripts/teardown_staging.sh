@@ -5,9 +5,9 @@ echo "=== Tearing down DeathTrap STAGING ==="
 echo "This destroys all staging resources. Ctrl+C within 5s to cancel."
 sleep 5
 cd ~/deathtrap-backend/infra
-cdk destroy DeathTrapApiStack     --context env=staging --force
-cdk destroy DeathTrapDataStack    --context env=staging --force
-cdk destroy DeathTrapNetworkStack --context env=staging --force
+cdk destroy DeathTrap-Api-staging     --force
+cdk destroy DeathTrap-Data-staging    --force
+cdk destroy DeathTrap-Network-staging --force
 aws s3 rm s3://deathtrap-staging-jars --recursive 2>/dev/null || true
 aws s3api delete-bucket \
   --bucket deathtrap-staging-jars --region ap-south-1 2>/dev/null || true
