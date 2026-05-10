@@ -294,7 +294,7 @@ export class ApiStack extends cdk.Stack {
       threshold: 1,
       evaluationPeriods: 1,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-      alarmDescription: 'SQS trigger DLQ has messages — immediate investigation required',
+      alarmDescription: 'SQS trigger DLQ has messages - immediate investigation required',
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
     sqsDlqAlarm.addAlarmAction(new cloudwatchActions.SnsAction(notifyTopic));

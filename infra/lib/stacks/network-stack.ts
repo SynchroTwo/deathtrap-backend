@@ -45,7 +45,7 @@ export class NetworkStack extends cdk.Stack {
     // DB security group: accepts inbound only from Lambda SG on port 5432
     this.dbSecurityGroup = new ec2.SecurityGroup(this, 'DbSecurityGroup', {
       vpc: this.vpc,
-      description: 'Security group for Aurora RDS — inbound from Lambda only',
+      description: 'Security group for Aurora RDS - inbound from Lambda only',
       allowAllOutbound: false,
     });
 

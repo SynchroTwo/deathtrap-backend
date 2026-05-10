@@ -35,7 +35,7 @@ export class DataStack extends cdk.Stack {
     // KMS CMK with annual rotation
     const kmsKey = new kms.Key(this, 'DeathTrapKmsKey', {
       enableKeyRotation: true,
-      description: `DeathTrap CMK — ${deployEnv}`,
+      description: `DeathTrap CMK - ${deployEnv}`,
       removalPolicy: isProd ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
     });
     this.kmsKeyId = kmsKey.keyId;
@@ -104,7 +104,7 @@ export class DataStack extends cdk.Stack {
     // SNS notification topic
     const snsTopic = new sns.Topic(this, 'NotifyTopic', {
       masterKey: kmsKey,
-      displayName: `DeathTrap Notifications — ${deployEnv}`,
+      displayName: `DeathTrap Notifications - ${deployEnv}`,
     });
     this.snsNotifyArn = snsTopic.topicArn;
 
