@@ -34,7 +34,7 @@ public class SnsOtpService {
     }
 
     private String maskDestination(String dest) {
-        if (dest == null || dest.length() < 4) return "***";
+        if (dest == null || dest.length() < 4) { return "***"; }
         return dest.substring(0, dest.length() - 8) + "XXXXXX" + dest.substring(dest.length() - 2);
     }
 
