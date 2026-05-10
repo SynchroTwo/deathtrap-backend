@@ -40,30 +40,53 @@ export class DataStack extends cdk.Stack {
     });
     this.kmsKeyId = kmsKey.keyId;
 
-    // Aurora Serverless v2 — PostgreSQL 15
-    const dbCluster = new rds.DatabaseCluster(this, 'AuroraCluster', {
-      engine: rds.DatabaseClusterEngine.auroraPostgres({
-        version: rds.AuroraPostgresEngineVersion.VER_15_4,
-      }),
-      serverlessV2MinCapacity: config.auroraMinAcu,
-      serverlessV2MaxCapacity: config.auroraMaxAcu,
-      writer: rds.ClusterInstance.serverlessV2('Writer', {
-        scaleWithWriter: true,
-      }),
-      readers: config.auroraInstances > 1
-        ? [rds.ClusterInstance.serverlessV2('Reader', { scaleWithWriter: false })]
-        : [],
-      vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-      securityGroups: [dbSecurityGroup],
-      storageEncrypted: true,
-      storageEncryptionKey: kmsKey,
-      backup: { retention: cdk.Duration.days(config.auroraBackupDays) },
-      deletionProtection: config.deletionProtection,
-      removalPolicy: isProd ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
-      defaultDatabaseName: 'deathtrap',
-    });
-    this.dbSecretArn = dbCluster.secret!.secretArn;
+    if (config.useAurora) {
+      // Aurora Serverless v2 - PostgreSQL 15 (prod only)
+      const dbCluster = new rds.DatabaseCluster(this, 'AuroraCluster', {
+        engine: rds.DatabaseClusterEngine.auroraPostgres({
+          version: rds.AuroraPostgresEngineVersion.VER_15_4,
+        }),
+        serverlessV2MinCapacity: config.auroraMinAcu,
+        serverlessV2MaxCapacity: config.auroraMaxAcu,
+        writer: rds.ClusterInstance.serverlessV2('Writer', {
+          scaleWithWriter: true,
+        }),
+        readers: config.auroraInstances > 1
+          ? [rds.ClusterInstance.serverlessV2('Reader', { scaleWithWriter: false })]
+          : [],
+        vpc,
+        vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+        securityGroups: [dbSecurityGroup],
+        storageEncrypted: true,
+        storageEncryptionKey: kmsKey,
+        backup: { retention: cdk.Duration.days(config.auroraBackupDays) },
+        deletionProtection: config.deletionProtection,
+        removalPolicy: cdk.RemovalPolicy.RETAIN,
+        defaultDatabaseName: 'deathtrap',
+      });
+      this.dbSecretArn = dbCluster.secret!.secretArn;
+    } else {
+      // RDS PostgreSQL db.t3.micro - free tier eligible (staging only)
+      const dbInstance = new rds.DatabaseInstance(this, 'RdsInstance', {
+        engine: rds.DatabaseInstanceEngine.postgres({
+          version: rds.PostgresEngineVersion.VER_15,
+        }),
+        instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MICRO),
+        vpc,
+        vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+        securityGroups: [dbSecurityGroup],
+        storageEncrypted: true,
+        storageEncryptionKey: kmsKey,
+        backupRetention: cdk.Duration.days(config.auroraBackupDays),
+        deletionProtection: false,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+        databaseName: 'deathtrap',
+        credentials: rds.Credentials.fromGeneratedSecret('deathtrap_admin'),
+        multiAz: false,
+        allocatedStorage: 20,
+      });
+      this.dbSecretArn = dbInstance.secret!.secretArn;
+    }
 
     // S3 bucket for encrypted blobs
     const bucket = new s3.Bucket(this, 'DeathTrapBucket', {

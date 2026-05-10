@@ -18,6 +18,7 @@ export interface DeathTrapConfig {
   environment: string;
   jarBucketName: string;
   jarPrefix: string;
+  useAurora: boolean;
 }
 
 export function getConfig(env: string): DeathTrapConfig {
@@ -42,5 +43,6 @@ export function getConfig(env: string): DeathTrapConfig {
     environment:         env,
     jarBucketName:       isProd ? 'deathtrap-prod-jars' : 'deathtrap-staging-jars',
     jarPrefix:           'lambda-jars/',
+    useAurora:           isProd,
   };
 }
