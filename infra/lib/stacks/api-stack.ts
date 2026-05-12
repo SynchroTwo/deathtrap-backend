@@ -96,36 +96,49 @@ export class ApiStack extends cdk.Stack {
       return fn;
     };
 
+    // Secret name passed to env vars (without random suffix - AWS SDK resolves it).
+    // IAM policy resources use the wildcard form so IAM can match the suffixed actual ARN.
+    const jwtSecretName = `deathtrap/${deployEnv}/jwt-secret`;
+    const webhookSecretName = `deathtrap/${deployEnv}/webhook-secret`;
+    const jwtSecretArn = `arn:aws:secretsmanager:ap-south-1:${this.account}:secret:${jwtSecretName}-*`;
+    const webhookSecretArn = `arn:aws:secretsmanager:ap-south-1:${this.account}:secret:${webhookSecretName}-*`;
     const authFn = createLambda(
       'AuthService', `${config.jarPrefix}auth-service-1.0.0-all.jar`,
       'in.deathtrap.auth.AuthHandler::handleRequest',
       256, cdk.Duration.seconds(15), config.authConcurrency,
-      { JWT_SECRET_ARN: `arn:aws:secretsmanager:ap-south-1:${this.account}:secret:deathtrap/${deployEnv}/jwt-secret` },
+      { JWT_SECRET_ARN: jwtSecretName },
     );
 
     const lockerFn = createLambda(
       'LockerService', `${config.jarPrefix}locker-service-1.0.0-all.jar`,
       'in.deathtrap.locker.LockerHandler::handleRequest',
-      512, cdk.Duration.seconds(30), config.lockerConcurrency, {},
+      512, cdk.Duration.seconds(30), config.lockerConcurrency,
+      { JWT_SECRET_ARN: jwtSecretName },
     );
 
     const recoveryFn = createLambda(
       'RecoveryService', `${config.jarPrefix}recovery-service-1.0.0-all.jar`,
       'in.deathtrap.recovery.RecoveryHandler::handleRequest',
-      256, cdk.Duration.seconds(30), config.recoveryConcurrency, {},
+      256, cdk.Duration.seconds(30), config.recoveryConcurrency,
+      { JWT_SECRET_ARN: jwtSecretName },
     );
 
     const triggerFn = createLambda(
       'TriggerService', `${config.jarPrefix}trigger-service-1.0.0-all.jar`,
       'in.deathtrap.trigger.TriggerHandler::handleRequest',
       256, cdk.Duration.seconds(60), config.triggerConcurrency,
-      { SQS_TRIGGER_URL: sqsTriggerUrl, SNS_NOTIFY_ARN: snsNotifyArn },
+      {
+        SQS_TRIGGER_URL: sqsTriggerUrl,
+        SNS_NOTIFY_ARN: snsNotifyArn,
+        JWT_SECRET_ARN: jwtSecretName,
+        WEBHOOK_SECRET_ARN: webhookSecretName,
+      },
     );
 
     const auditFn = createLambda(
       'AuditService', `${config.jarPrefix}audit-service-1.0.0-all.jar`,
       'in.deathtrap.audit.AuditHandler::handleRequest',
-      128, cdk.Duration.seconds(15), config.auditConcurrency, {},
+      256, cdk.Duration.seconds(15), config.auditConcurrency, {},
     );
 
     const sqsConsumerFn = createLambda(
@@ -146,6 +159,18 @@ export class ApiStack extends cdk.Stack {
     });
     [authFn, lockerFn, recoveryFn, triggerFn, auditFn, sqsConsumerFn]
       .forEach(fn => fn.addToRolePolicy(secretPolicy));
+
+    // IAM: JWT secret access for all HTTP services (auth, locker, recovery, trigger)
+    [authFn, lockerFn, recoveryFn, triggerFn].forEach(fn => fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [jwtSecretArn],
+    })));
+
+    // IAM: Webhook secret access for trigger
+    triggerFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [webhookSecretArn],
+    }));
 
     // IAM: SNS publish for auth
     authFn.addToRolePolicy(new iam.PolicyStatement({

@@ -1,4 +1,7 @@
-plugins { id("org.springframework.boot") }
+plugins {
+    id("org.springframework.boot")
+    id("lambda-shadow")
+}
 dependencies {
     implementation(project(":packages:common-types"))
     implementation(project(":packages:common-errors"))
@@ -14,6 +17,7 @@ dependencies {
     implementation("com.amazonaws:aws-lambda-java-events:3.11.4")
     implementation("io.jsonwebtoken:jjwt-api:0.12.5")
     implementation("software.amazon.awssdk:s3:2.26.31")
+    implementation("software.amazon.awssdk:secretsmanager:2.26.31")
     implementation("software.amazon.awssdk:sqs:2.26.31")
     implementation("software.amazon.awssdk:url-connection-client:2.26.31")
     implementation("net.logstash.logback:logstash-logback-encoder:8.0")
@@ -28,7 +32,4 @@ dependencies {
     testImplementation("org.mockito:mockito-junit-jupiter")
     testImplementation(testFixtures(project(":packages:common-db")))
     testImplementation("io.zonky.test:embedded-postgres:2.0.6")
-}
-tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
-    archiveBaseName.set("recovery-service"); archiveVersion.set("1.0.0"); archiveClassifier.set("all")
 }

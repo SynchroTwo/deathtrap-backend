@@ -1,4 +1,7 @@
-plugins { id("org.springframework.boot") }
+plugins {
+    id("org.springframework.boot")
+    id("lambda-shadow")
+}
 dependencies {
     implementation(project(":packages:common-types"))
     implementation(project(":packages:common-errors"))
@@ -15,6 +18,7 @@ dependencies {
     implementation("io.jsonwebtoken:jjwt-api:0.12.5")
     implementation("software.amazon.awssdk:sqs:2.26.31")
     implementation("software.amazon.awssdk:sns:2.26.31")
+    implementation("software.amazon.awssdk:secretsmanager:2.26.31")
     implementation("software.amazon.awssdk:url-connection-client:2.26.31")
     implementation("net.logstash.logback:logstash-logback-encoder:8.0")
     implementation("com.amazonaws:aws-xray-recorder-sdk-core:2.18.0")
@@ -26,7 +30,4 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.mockito:mockito-core")
     testImplementation("org.mockito:mockito-junit-jupiter")
-}
-tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
-    archiveBaseName.set("trigger-service"); archiveVersion.set("1.0.0"); archiveClassifier.set("all")
 }
