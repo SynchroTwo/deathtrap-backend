@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
@@ -47,6 +48,18 @@ public class GlobalExceptionHandler {
         log.warn("Missing required header {} requestId={}", ex.getHeaderName(), requestId);
         ApiError error = new ApiError(ErrorCode.VALIDATION_FAILED.name(),
                 "Missing required header: " + ex.getHeaderName(), null);
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error(error, requestId));
+    }
+
+    /** Handles malformed request bodies (bad JSON, enum mismatch, missing fields) as 400. */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnreadable(HttpMessageNotReadableException ex) {
+        String requestId = UUID.randomUUID().toString();
+        log.warn("Malformed request body requestId={} cause={}", requestId, ex.getMostSpecificCause().getMessage());
+        ApiError error = new ApiError(ErrorCode.VALIDATION_FAILED.name(),
+                "Malformed request body: " + ex.getMostSpecificCause().getMessage(), null);
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.error(error, requestId));
