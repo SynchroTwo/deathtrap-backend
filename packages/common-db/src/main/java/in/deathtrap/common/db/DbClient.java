@@ -1,6 +1,8 @@
 package in.deathtrap.common.db;
 
 import in.deathtrap.common.errors.AppException;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import org.slf4j.Logger;
@@ -30,7 +32,7 @@ public class DbClient {
     /** Executes a query and maps all rows using the given RowMapper. */
     public <T> List<T> query(String sql, RowMapper<T> mapper, Object... params) {
         try {
-            return jdbcTemplate.query(sql, mapper, params);
+            return jdbcTemplate.query(sql, mapper, convertParams(params));
         } catch (DataAccessException ex) {
             log.error("Database query failed", ex);
             throw AppException.internalError();
@@ -40,7 +42,7 @@ public class DbClient {
     /** Executes a query and returns at most one row, or empty if none found. */
     public <T> Optional<T> queryOne(String sql, RowMapper<T> mapper, Object... params) {
         try {
-            List<T> results = jdbcTemplate.query(sql, mapper, params);
+            List<T> results = jdbcTemplate.query(sql, mapper, convertParams(params));
             return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
         } catch (DataAccessException ex) {
             log.error("Database queryOne failed", ex);
@@ -51,11 +53,23 @@ public class DbClient {
     /** Executes an INSERT, UPDATE, or DELETE and returns the number of affected rows. */
     public int execute(String sql, Object... params) {
         try {
-            return jdbcTemplate.update(sql, params);
+            return jdbcTemplate.update(sql, convertParams(params));
         } catch (DataAccessException ex) {
             log.error("Database execute failed", ex);
             throw AppException.internalError();
         }
+    }
+
+    /** PgJDBC does not infer java.time.Instant; convert to Timestamp for binding. */
+    private static Object[] convertParams(Object[] params) {
+        if (params == null) {
+            return null;
+        }
+        Object[] out = new Object[params.length];
+        for (int i = 0; i < params.length; i++) {
+            out[i] = (params[i] instanceof Instant) ? Timestamp.from((Instant) params[i]) : params[i];
+        }
+        return out;
     }
 
     /** Executes the given callback within a database transaction. */
