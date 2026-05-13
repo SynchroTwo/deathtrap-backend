@@ -138,7 +138,8 @@ export class ApiStack extends cdk.Stack {
     const auditFn = createLambda(
       'AuditService', `${config.jarPrefix}audit-service-1.0.0-all.jar`,
       'in.deathtrap.audit.AuditHandler::handleRequest',
-      256, cdk.Duration.seconds(15), config.auditConcurrency, {},
+      256, cdk.Duration.seconds(15), config.auditConcurrency,
+      { JWT_SECRET_ARN: jwtSecretName },
     );
 
     const sqsConsumerFn = createLambda(
@@ -160,8 +161,8 @@ export class ApiStack extends cdk.Stack {
     [authFn, lockerFn, recoveryFn, triggerFn, auditFn, sqsConsumerFn]
       .forEach(fn => fn.addToRolePolicy(secretPolicy));
 
-    // IAM: JWT secret access for all HTTP services (auth, locker, recovery, trigger)
-    [authFn, lockerFn, recoveryFn, triggerFn].forEach(fn => fn.addToRolePolicy(new iam.PolicyStatement({
+    // IAM: JWT secret access for all HTTP services (auth, locker, recovery, trigger, audit)
+    [authFn, lockerFn, recoveryFn, triggerFn, auditFn].forEach(fn => fn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['secretsmanager:GetSecretValue'],
       resources: [jwtSecretArn],
     })));

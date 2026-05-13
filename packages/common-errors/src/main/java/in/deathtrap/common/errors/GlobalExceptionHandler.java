@@ -11,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -28,6 +29,26 @@ public class GlobalExceptionHandler {
         ApiError error = new ApiError(ex.getErrorCode().name(), ex.getErrorCode().getDefaultMessage(), ex.getDetails());
         return ResponseEntity
                 .status(ex.getErrorCode().getHttpStatus())
+                .body(ApiResponse.error(error, requestId));
+    }
+
+    /** Handles missing Authorization header as 401 (instead of falling through to 500). */
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMissingHeader(MissingRequestHeaderException ex) {
+        String requestId = UUID.randomUUID().toString();
+        if ("Authorization".equalsIgnoreCase(ex.getHeaderName())) {
+            log.warn("Missing Authorization header requestId={}", requestId);
+            ApiError error = new ApiError(ErrorCode.AUTH_UNAUTHORIZED.name(),
+                    ErrorCode.AUTH_UNAUTHORIZED.getDefaultMessage(), null);
+            return ResponseEntity
+                    .status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResponse.error(error, requestId));
+        }
+        log.warn("Missing required header {} requestId={}", ex.getHeaderName(), requestId);
+        ApiError error = new ApiError(ErrorCode.VALIDATION_FAILED.name(),
+                "Missing required header: " + ex.getHeaderName(), null);
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.error(error, requestId));
     }
 
