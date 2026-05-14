@@ -8,7 +8,7 @@ import in.deathtrap.common.db.DbClient;
 import in.deathtrap.common.errors.AppException;
 import in.deathtrap.common.types.api.ApiResponse;
 import in.deathtrap.common.types.domain.OtpLog;
-import in.deathtrap.common.types.dto.VerifyOtpRequest;
+import in.deathtrap.common.types.dto.VerifyEmailOtpRequest;
 import in.deathtrap.common.types.enums.AuditEventType;
 import in.deathtrap.common.types.enums.AuditResult;
 import in.deathtrap.common.types.enums.OtpChannel;
@@ -29,12 +29,14 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Handles OTP verification requests. */
+/** Handles email OTP verification. Only REGISTRATION purpose is supported.
+ *  Issues verifiedToken once both email and the linked mobile have been verified;
+ *  otherwise returns "awaiting mobile verification". */
 @RestController
 @RequestMapping("/auth/otp")
-public class VerifyOtpHandler {
+public class VerifyEmailOtpHandler {
 
-    private static final Logger log = LoggerFactory.getLogger(VerifyOtpHandler.class);
+    private static final Logger log = LoggerFactory.getLogger(VerifyEmailOtpHandler.class);
     private static final int MAX_ATTEMPTS = 3;
     private static final int LOCK_MINUTES = 30;
 
@@ -42,6 +44,9 @@ public class VerifyOtpHandler {
             "SELECT otp_id, party_id, party_type, channel, purpose, otp_hash, attempts, verified, locked_until, expires_at, created_at " +
             "FROM otp_log WHERE party_id = ? AND channel = ?::otp_channel_enum AND purpose = ?::otp_purpose_enum AND verified = false " +
             "ORDER BY created_at DESC LIMIT 1";
+    private static final String SELECT_VERIFIED_OTP =
+            "SELECT otp_id FROM otp_log WHERE party_id = ? AND channel = ?::otp_channel_enum " +
+            "AND purpose = ?::otp_purpose_enum AND verified = true ORDER BY created_at DESC LIMIT 1";
     private static final String UPDATE_ATTEMPTS =
             "UPDATE otp_log SET attempts = attempts + 1 WHERE otp_id = ?";
     private static final String UPDATE_LOCKED =
@@ -62,38 +67,53 @@ public class VerifyOtpHandler {
             rs.getTimestamp("expires_at").toInstant(),
             rs.getTimestamp("created_at").toInstant());
 
+    private static final RowMapper<String> STRING_MAPPER = (rs, row) -> rs.getString(1);
+
     private final DbClient dbClient;
     private final JwtService jwtService;
     private final AuditWriter auditWriter;
 
-    /** Constructs VerifyOtpHandler with required dependencies. */
-    public VerifyOtpHandler(DbClient dbClient, JwtService jwtService, AuditWriter auditWriter) {
+    public VerifyEmailOtpHandler(DbClient dbClient, JwtService jwtService, AuditWriter auditWriter) {
         this.dbClient = dbClient;
         this.jwtService = jwtService;
         this.auditWriter = auditWriter;
     }
 
-    /** POST /auth/otp/verify — verifies both OTPs and returns a short-lived verified_token JWT. */
-    @PostMapping("/verify")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> verifyOtp(
-            @RequestBody @Valid VerifyOtpRequest request) {
+    @PostMapping("/verify-email")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> verifyEmail(
+            @RequestBody @Valid VerifyEmailOtpRequest request) {
+
+        if (request.purpose() != OtpPurpose.REGISTRATION) {
+            throw AppException.validationFailed(
+                    Map.of("purpose", "Email OTP verification is only supported for REGISTRATION"));
+        }
 
         Instant now = Instant.now();
         String purpose = request.purpose().name().toLowerCase();
 
-        OtpLog mobileOtp = fetchOtp(request.partyId(), "sms", purpose, now);
-        verifyAndMark(mobileOtp, request.mobileOtp(), now);
-
-        OtpLog emailOtp = fetchOtp(request.partyId(), "email", purpose, now);
-        verifyAndMark(emailOtp, request.emailOtp(), now);
+        OtpLog otpRow = fetchOtp(request.email(), "email", purpose, now);
+        verifyAndMark(otpRow, request.otp(), now);
 
         auditWriter.write(AuditWritePayload.builder(AuditEventType.OTP_VERIFIED, AuditResult.SUCCESS)
-                .actorId(request.partyId()).actorType(PartyType.CREATOR).build());
+                .actorId(request.email()).actorType(PartyType.CREATOR).build());
 
-        String verifiedToken = jwtService.issueVerifiedToken(request.partyId(), request.purpose());
         String requestId = UUID.randomUUID().toString();
-        Map<String, Object> body = Map.of("verifiedToken", verifiedToken, "expiresInSeconds", 900);
-        return ResponseEntity.ok(ApiResponse.ok(body, requestId));
+
+        boolean mobileVerified = dbClient.queryOne(SELECT_VERIFIED_OTP, STRING_MAPPER,
+                request.mobile(), "sms", purpose).isPresent();
+        if (!mobileVerified) {
+            return ResponseEntity.ok(ApiResponse.ok(
+                    Map.of("message", "Email verified. Verify mobile to complete registration.",
+                            "mobileVerified", false, "emailVerified", true),
+                    requestId));
+        }
+
+        // PartyId for the issued token is the mobile (matches the registration primary key
+        // used downstream by /auth/register).
+        String verifiedToken = jwtService.issueVerifiedToken(request.mobile(), request.purpose());
+        return ResponseEntity.ok(ApiResponse.ok(
+                Map.of("verifiedToken", verifiedToken, "expiresInSeconds", 900),
+                requestId));
     }
 
     private OtpLog fetchOtp(String partyId, String channel, String purpose, Instant now) {
