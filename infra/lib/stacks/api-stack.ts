@@ -179,7 +179,12 @@ export class ApiStack extends cdk.Stack {
       resources: [snsNotifyArn],
     }));
 
-    // IAM: S3 access
+    // IAM: S3 access (and KMS data-key permissions for SSE-KMS-encrypted bucket)
+    // The deathtrap data bucket is encrypted with the per-env KMS CMK, so any
+    // PutObject requires kms:GenerateDataKey and any GetObject requires kms:Decrypt
+    // on that key. Without these, S3 returns 403 even when s3:* IAM is correct.
+    const kmsKeyArn = `arn:aws:kms:ap-south-1:${this.account}:key/${kmsKeyId}`;
+
     lockerFn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['s3:PutObject', 's3:GetObject'],
       resources: [`arn:aws:s3:::${s3BucketName}/locker/*`],
@@ -192,6 +197,12 @@ export class ApiStack extends cdk.Stack {
       actions: ['s3:PutObject', 's3:GetObject'],
       resources: [`arn:aws:s3:::${s3BucketName}/audit/*`],
     }));
+
+    // KMS GenerateDataKey + Decrypt for every Lambda that touches S3.
+    [lockerFn, recoveryFn, auditFn].forEach(fn => fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['kms:GenerateDataKey', 'kms:Decrypt'],
+      resources: [kmsKeyArn],
+    })));
 
     // IAM: SQS send for trigger
     triggerFn.addToRolePolicy(new iam.PolicyStatement({
