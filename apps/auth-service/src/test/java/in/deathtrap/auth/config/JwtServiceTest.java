@@ -93,6 +93,37 @@ class JwtServiceTest {
     }
 
     @Test
+    void validateRefreshToken_acceptsRefreshJwt() {
+        String token = jwtService.issueRefreshToken("user-1", PartyType.CREATOR, "session-1");
+
+        JwtPayload payload = jwtService.validateRefreshToken(token);
+
+        assertEquals("user-1", payload.sub());
+        assertEquals(PartyType.CREATOR, payload.partyType());
+        assertEquals("session-1", payload.jti());
+    }
+
+    @Test
+    void validateRefreshToken_rejectsAccessJwt() {
+        String accessToken = jwtService.issueToken("user-1", PartyType.CREATOR, "session-1");
+
+        AppException ex = assertThrows(AppException.class,
+                () -> jwtService.validateRefreshToken(accessToken));
+
+        assertEquals(ErrorCode.AUTH_INVALID_VERIFIED_TOKEN, ex.getErrorCode());
+    }
+
+    @Test
+    void validateRefreshToken_rejectsVerifiedOtpToken() {
+        String verifiedToken = jwtService.issueVerifiedToken("+919876543210", OtpPurpose.LOGIN);
+
+        AppException ex = assertThrows(AppException.class,
+                () -> jwtService.validateRefreshToken(verifiedToken));
+
+        assertEquals(ErrorCode.AUTH_INVALID_VERIFIED_TOKEN, ex.getErrorCode());
+    }
+
+    @Test
     void getAccessTokenSeconds_returnsPositiveValue() {
         assertTrue(jwtService.getAccessTokenSeconds() > 0);
     }

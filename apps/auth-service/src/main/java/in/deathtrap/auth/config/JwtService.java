@@ -132,6 +132,42 @@ public class JwtService {
         }
     }
 
+    /**
+     * Validates a refresh JWT and returns its payload.
+     * Throws AppException if signature/expiry invalid, or if the token is
+     * not of type=refresh (e.g. an access token was sent instead).
+     */
+    public JwtPayload validateRefreshToken(String token) {
+        try {
+            Claims claims = Jwts.parser()
+                    .verifyWith(signingKey)
+                    .build()
+                    .parseSignedClaims(token)
+                    .getPayload();
+            String type = claims.get(CLAIM_TOKEN_TYPE, String.class);
+            if (!TYPE_REFRESH.equals(type)) {
+                log.warn("Refresh endpoint received non-refresh token (type={})", type);
+                throw AppException.invalidVerifiedToken();
+            }
+            String partyTypeStr = claims.get(CLAIM_PARTY_TYPE, String.class);
+            PartyType partyType = PartyType.valueOf(partyTypeStr);
+            return new JwtPayload(
+                    claims.getSubject(),
+                    partyType,
+                    claims.getId(),
+                    claims.getIssuedAt().getTime() / 1000L,
+                    claims.getExpiration().getTime() / 1000L);
+        } catch (ExpiredJwtException ex) {
+            log.warn("Refresh token expired");
+            throw AppException.sessionExpired();
+        } catch (AppException ex) {
+            throw ex;
+        } catch (JwtException | IllegalArgumentException ex) {
+            log.warn("Refresh token invalid");
+            throw AppException.invalidVerifiedToken();
+        }
+    }
+
     /** Returns the configured access token TTL in seconds. */
     public long getAccessTokenSeconds() {
         return accessTokenSeconds;
