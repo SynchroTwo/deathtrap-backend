@@ -165,4 +165,55 @@ public class AppException extends RuntimeException {
         return new AppException(ErrorCode.TRIGGER_INSUFFICIENT_SOURCES,
                 Map.of("sourcesReceived", received, "sourcesRequired", required));
     }
+
+    // --- Recovery blob format v1 factories ---
+
+    /** Returns an exception when the client's recovery blob spec version is not supported. */
+    public static AppException recoveryUnsupportedSpecVersion(String supplied, java.util.List<String> supported) {
+        return new AppException(ErrorCode.RECOVERY_UNSUPPORTED_SPEC_VERSION,
+                Map.of("supplied", supplied, "supported", supported));
+    }
+
+    /** Returns an exception when the recipient list does not start with a lawyer or includes non-nominee layers. */
+    public static AppException recoveryInvalidRecipientOrder(String detail) {
+        return new AppException(ErrorCode.RECOVERY_INVALID_RECIPIENT_ORDER, Map.of("detail", detail));
+    }
+
+    /** Returns an exception when the recipient count is outside [2, 7]. */
+    public static AppException recoveryLayerCountOutOfBounds(int supplied) {
+        return new AppException(ErrorCode.RECOVERY_LAYER_COUNT_OUT_OF_BOUNDS,
+                Map.of("supplied", supplied, "min", 2, "max", 7));
+    }
+
+    /** Returns an exception when a referenced recipient is not owned by the creator. */
+    public static AppException recoveryUnknownRecipient(String partyId, String partyType) {
+        return new AppException(ErrorCode.RECOVERY_UNKNOWN_RECIPIENT,
+                Map.of("partyId", partyId, "partyType", partyType));
+    }
+
+    /** Returns an exception when the client-supplied keyFingerprint does not match the active pubkey. */
+    public static AppException recoveryStaleRecipientKey(
+            String partyId, String partyType, String currentFingerprint, String providedFingerprint) {
+        return new AppException(ErrorCode.RECOVERY_STALE_RECIPIENT_KEY, Map.of(
+                "partyId", partyId,
+                "partyType", partyType,
+                "currentFingerprint", currentFingerprint,
+                "providedFingerprint", providedFingerprint));
+    }
+
+    /** Returns an exception when the same partyId appears twice in the recipient list. */
+    public static AppException recoveryDuplicateRecipient(String partyId) {
+        return new AppException(ErrorCode.RECOVERY_DUPLICATE_RECIPIENT, Map.of("partyId", partyId));
+    }
+
+    /** Returns an exception when layerOrder values are not a dense 1..N permutation. */
+    public static AppException recoveryInvalidLayerOrdering(String detail) {
+        return new AppException(ErrorCode.RECOVERY_INVALID_LAYER_ORDERING, Map.of("detail", detail));
+    }
+
+    /** Returns an exception when the encrypted blob exceeds the size cap. */
+    public static AppException recoveryBlobTooLarge(int suppliedBytes, int maxBytes) {
+        return new AppException(ErrorCode.RECOVERY_BLOB_TOO_LARGE,
+                Map.of("suppliedBytes", suppliedBytes, "maxBytes", maxBytes));
+    }
 }

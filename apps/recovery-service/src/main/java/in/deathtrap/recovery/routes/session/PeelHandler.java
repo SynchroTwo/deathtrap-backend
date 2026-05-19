@@ -56,8 +56,10 @@ public class PeelHandler {
             "WHERE session_id = ? AND party_id = ? AND party_type = ?::party_type_enum LIMIT 1";
     private static final String INSERT_PEEL_EVENT =
             "INSERT INTO recovery_peel_events (peel_id, session_id, layer_id, party_id, " +
-            "party_type, layer_order, intermediate_hash, peeled_at, created_at) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())";
+            "party_type, layer_order, intermediate_hash, spec_version, peeled_at, created_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())";
+    private static final String SELECT_BLOB_SPEC_VERSION =
+            "SELECT spec_version FROM recovery_blobs WHERE blob_id = ? LIMIT 1";
     private static final String UPDATE_SESSION_IN_PROGRESS =
             "UPDATE recovery_sessions SET status = 'in_progress', updated_at = NOW() WHERE session_id = ?";
     private static final String SELECT_LAYER_COUNT =
@@ -151,9 +153,14 @@ public class PeelHandler {
         String intermediateHash = Sha256Util.hashHex(intermediateBytes);
 
         String peelId = CsprngUtil.randomUlid();
+        // Denormalize spec_version from the parent blob into the peel event for forensic queries
+        // (per docs/RECOVERY_SPEC_V1_BACKEND_CHANGES.md §2.3, §3.2). Column is nullable to keep
+        // historical peels from breaking on schema evolution.
+        String specVersion = dbClient.queryOne(SELECT_BLOB_SPEC_VERSION, STRING_MAPPER, session.blobId())
+                .orElse(null);
         String finalStatus = dbClient.withTransaction(status -> {
             dbClient.execute(INSERT_PEEL_EVENT, peelId, sessionId, myLayer.layerId(),
-                    partyId, partyTypeStr, myLayer.layerOrder(), intermediateHash);
+                    partyId, partyTypeStr, myLayer.layerOrder(), intermediateHash, specVersion);
             dbClient.execute(UPDATE_SESSION_IN_PROGRESS, sessionId);
 
             List<Integer> layerCountRows = dbClient.query(SELECT_LAYER_COUNT,
@@ -173,9 +180,9 @@ public class PeelHandler {
             return "in_progress";
         });
 
-        int layersRemaining = 0;
-        String nextPartyId = null;
-        String nextPartyType = null;
+        int remainingLayers = 0;
+        String nextRecipientPartyId = null;
+        String nextRecipientPartyType = null;
         Instant completedAt = null;
         if ("completed".equals(finalStatus)) {
             completedAt = Instant.now();
@@ -184,9 +191,9 @@ public class PeelHandler {
             List<RecoveryBlobLayer> nextPartyRows = dbClient.query(SELECT_NEXT_PARTY,
                     RecoveryBlobLayerRowMapper.INSTANCE, session.blobId(), nextLayerOrder);
             if (!nextPartyRows.isEmpty()) {
-                nextPartyId = nextPartyRows.get(0).partyId();
-                nextPartyType = nextPartyRows.get(0).partyType();
-                layersRemaining = 1;
+                nextRecipientPartyId = nextPartyRows.get(0).partyId();
+                nextRecipientPartyType = nextPartyRows.get(0).partyType();
+                remainingLayers = 1;
             }
         }
 
@@ -194,7 +201,7 @@ public class PeelHandler {
                 .builder(AuditEventType.RECOVERY_LAYER_PEELED, AuditResult.SUCCESS)
                 .actorId(partyId).actorType(partyType).targetId(sessionId)
                 .metadataJson(Map.of("layerOrder", myLayer.layerOrder(),
-                        "layersRemaining", layersRemaining))
+                        "remainingLayers", remainingLayers))
                 .build());
 
         log.info("Layer peeled: sessionId={} partyId={} layerOrder={} status={}",
@@ -202,17 +209,17 @@ public class PeelHandler {
 
         String requestId = UUID.randomUUID().toString();
         return ResponseEntity.ok(ApiResponse.ok(new PeelResponse(
-                peelId, myLayer.layerOrder(), finalStatus, layersRemaining,
-                nextPartyId, nextPartyType, completedAt), requestId));
+                peelId, myLayer.layerOrder(), finalStatus, remainingLayers,
+                nextRecipientPartyId, nextRecipientPartyType, completedAt), requestId));
     }
 
     private record PeelResponse(
             String peelId,
             int layerOrder,
             String sessionStatus,
-            int layersRemaining,
-            String nextPartyId,
-            String nextPartyType,
+            int remainingLayers,
+            String nextRecipientPartyId,
+            String nextRecipientPartyType,
             Instant completedAt
     ) {}
 }

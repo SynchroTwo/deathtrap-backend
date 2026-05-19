@@ -29,6 +29,16 @@ public enum ErrorCode {
     LOCKER_VERSION_CONFLICT(409, "Locker blob version conflict"),
     RECOVERY_SESSION_DISPUTED(409, "Recovery session is disputed"),
 
+    // Recovery blob format v1 (see docs/RECOVERY_BLOB_FORMAT.md)
+    RECOVERY_UNSUPPORTED_SPEC_VERSION(400, "Unsupported recovery blob spec version"),
+    RECOVERY_INVALID_RECIPIENT_ORDER(400, "Recovery blob recipient ordering invalid (lawyer must be layerOrder=1, all others nominees)"),
+    RECOVERY_LAYER_COUNT_OUT_OF_BOUNDS(400, "Recovery blob layer count out of bounds (must be 2..7)"),
+    RECOVERY_UNKNOWN_RECIPIENT(400, "Recovery blob references an unknown recipient for this creator"),
+    RECOVERY_STALE_RECIPIENT_KEY(400, "Recovery blob recipient key fingerprint does not match the recipient's active pubkey"),
+    RECOVERY_DUPLICATE_RECIPIENT(400, "Recovery blob has a duplicate recipient party"),
+    RECOVERY_INVALID_LAYER_ORDERING(400, "Recovery blob layer ordering is not dense and 1-indexed"),
+    RECOVERY_BLOB_TOO_LARGE(413, "Recovery blob exceeds the 32 KB size limit"),
+
     // Trigger
     TRIGGER_INSUFFICIENT_SOURCES(400, "Insufficient signal sources for trigger"),
 
