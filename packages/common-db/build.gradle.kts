@@ -9,6 +9,7 @@ dependencies {
     runtimeOnly("org.postgresql:postgresql")
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
+    implementation("software.amazon.awssdk:secretsmanager:2.26.31")
 
     testFixturesImplementation("org.springframework.boot:spring-boot-starter-data-jdbc")
     testFixturesImplementation("org.flywaydb:flyway-core")

@@ -1,5 +1,6 @@
 plugins {
     id("org.springframework.boot")
+    id("lambda-shadow")
 }
 
 dependencies {
@@ -22,6 +23,7 @@ dependencies {
     implementation("software.amazon.awssdk:sns:2.26.31")
     implementation("software.amazon.awssdk:ses:2.26.31")
     implementation("software.amazon.awssdk:sqs:2.26.31")
+    implementation("software.amazon.awssdk:secretsmanager:2.26.31")
     implementation("net.logstash.logback:logstash-logback-encoder:8.0")
     implementation("com.amazonaws:aws-xray-recorder-sdk-core:2.18.0")
     implementation("org.springframework.boot:spring-boot-starter-aop")
@@ -34,8 +36,3 @@ dependencies {
     testImplementation("io.zonky.test:embedded-postgres:2.0.6")
 }
 
-tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
-    archiveBaseName.set("auth-service")
-    archiveVersion.set("1.0.0")
-    archiveClassifier.set("all")
-}

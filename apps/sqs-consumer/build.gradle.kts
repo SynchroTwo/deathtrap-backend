@@ -1,4 +1,7 @@
-plugins { id("org.springframework.boot") }
+plugins {
+    id("org.springframework.boot")
+    id("lambda-shadow")
+}
 dependencies {
     implementation(project(":packages:common-types"))
     implementation(project(":packages:common-errors"))
@@ -19,7 +22,4 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.mockito:mockito-core")
     testImplementation("org.mockito:mockito-junit-jupiter")
-}
-tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
-    archiveBaseName.set("sqs-consumer"); archiveVersion.set("1.0.0"); archiveClassifier.set("all")
 }
