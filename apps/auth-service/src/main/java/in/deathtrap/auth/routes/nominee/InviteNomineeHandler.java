@@ -44,7 +44,7 @@ public class InviteNomineeHandler {
     private static final int INVITE_WARN_THRESHOLD = 5;
 
     private static final String SELECT_USER =
-            "SELECT user_id, full_name, date_of_birth, mobile, email, address, pan_ref, aadhaar_ref, " +
+            "SELECT user_id, full_name, date_of_birth, mobile, email, address, pan_ref, " +
             "kyc_status, status, risk_accepted_at, zero_nominee_risk_version, locker_completeness_pct, " +
             "last_reviewed_at, inactivity_trigger_months, created_at, updated_at, deleted_at " +
             "FROM users WHERE user_id = ? AND deleted_at IS NULL LIMIT 1";
@@ -60,7 +60,7 @@ public class InviteNomineeHandler {
             rs.getString("user_id"), rs.getString("full_name"),
             rs.getDate("date_of_birth").toLocalDate(),
             rs.getString("mobile"), rs.getString("email"),
-            rs.getString("address"), rs.getString("pan_ref"), rs.getString("aadhaar_ref"),
+            rs.getString("address"), rs.getString("pan_ref"),
             KycStatus.valueOf(rs.getString("kyc_status").toUpperCase()),
             UserStatus.valueOf(rs.getString("status").toUpperCase()),
             rs.getTimestamp("risk_accepted_at") != null ? rs.getTimestamp("risk_accepted_at").toInstant() : null,

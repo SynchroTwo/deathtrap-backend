@@ -114,7 +114,7 @@ class ResolveDisputeHandlerTest {
     }
 
     @Test
-    void alreadyResolvedDispute_throwsConflict() {
+    void alreadyResolvedDispute_throwsRecoverySessionDisputed() {
         when(jwtService.validateToken(anyString())).thenReturn(adminJwt());
         when(dbClient.query(anyString(), any(), any()))          // 1-vararg → resolved dispute
                 .thenReturn((List) List.of(resolvedDispute()));
@@ -123,6 +123,6 @@ class ResolveDisputeHandlerTest {
                 () -> handler.resolveDispute(DISPUTE_ID,
                         new ResolveDisputeRequest("resolved_proceed", null), BEARER));
 
-        assertEquals(ErrorCode.CONFLICT, ex.getErrorCode());
+        assertEquals(ErrorCode.RECOVERY_SESSION_DISPUTED, ex.getErrorCode());
     }
 }

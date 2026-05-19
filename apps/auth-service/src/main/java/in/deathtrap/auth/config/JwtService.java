@@ -90,17 +90,17 @@ public class JwtService {
                     .getPayload();
             String type = claims.get(CLAIM_TOKEN_TYPE, String.class);
             if (!TYPE_OTP_VERIFIED.equals(type)) {
-                throw AppException.sessionInvalid();
+                throw AppException.invalidVerifiedToken();
             }
             return claims.getSubject();
         } catch (ExpiredJwtException ex) {
             log.warn("Verified token expired");
-            throw AppException.sessionExpired();
+            throw AppException.invalidVerifiedToken();
         } catch (AppException ex) {
             throw ex;
         } catch (JwtException | IllegalArgumentException ex) {
             log.warn("Verified token invalid");
-            throw AppException.sessionInvalid();
+            throw AppException.invalidVerifiedToken();
         }
     }
 

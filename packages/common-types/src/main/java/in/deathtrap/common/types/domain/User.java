@@ -15,7 +15,6 @@ public record User(
         @NotNull String email,
         String address,
         String panRef,
-        String aadhaarRef,
         @NotNull KycStatus kycStatus,
         @NotNull UserStatus status,
         Instant riskAcceptedAt,

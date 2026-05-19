@@ -158,6 +158,11 @@ class AuthServiceIntegrationTest extends IntegrationTestBase {
         int privkeys = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM encrypted_privkey_blobs WHERE party_id = ?", Integer.class, userId);
         assertEquals(1, privkeys, "One encrypted privkey blob should be created");
+
+        int sessions = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM sessions WHERE party_id = ? AND revoked_at IS NULL",
+                Integer.class, userId);
+        assertEquals(1, sessions, "One active session should be created on register");
     }
 
     @Test
@@ -182,7 +187,6 @@ class AuthServiceIntegrationTest extends IntegrationTestBase {
         return new RegisterCreatorRequest(
                 "Integration Tester", LocalDate.of(1990, 6, 15),
                 mobile, email, "123 Test Street",
-                "XXXX1234", "KYC-INT-001",
                 "ABCDE", "A".repeat(35), true, 80,
                 "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYFK4EEAAoDQgAE\n-----END PUBLIC KEY-----",
                 "fp-integration-001",

@@ -6,7 +6,10 @@ import in.deathtrap.common.crypto.HibpClient;
 import in.deathtrap.common.db.DbClient;
 import in.deathtrap.common.errors.AppException;
 import in.deathtrap.common.errors.ErrorCode;
+import in.deathtrap.common.types.api.ApiResponse;
 import in.deathtrap.common.types.dto.RegisterCreatorRequest;
+import in.deathtrap.common.types.dto.RegisterCreatorResponse;
+import in.deathtrap.common.types.enums.PartyType;
 import java.time.LocalDate;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -17,7 +20,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -51,7 +56,6 @@ class RegisterHandlerTest {
         return new RegisterCreatorRequest(
                 "Test User", LocalDate.of(1990, 1, 1),
                 "+919876543210", "test@example.com", "Test Address",
-                "XXXX1234", "KYC-REF-001",
                 HIBP_PREFIX, HIBP_SUFFIX, true, 80,
                 "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYFK4EEAAoDQgAE\n-----END PUBLIC KEY-----",
                 "abc123fingerprint",
@@ -60,15 +64,25 @@ class RegisterHandlerTest {
     }
 
     @Test
-    void validRequest_createsUserAndReturns201() {
+    void validRequest_createsUserAndReturnsTokens() {
         when(jwtService.validateVerifiedToken(anyString())).thenReturn("+919876543210");
         when(dbClient.queryOne(anyString(), any(), any())).thenReturn(Optional.empty());
         when(dbClient.withTransaction(any())).thenReturn(null);
+        when(jwtService.issueToken(anyString(), any(PartyType.class), anyString())).thenReturn("session-jwt");
+        when(jwtService.issueRefreshToken(anyString(), any(PartyType.class), anyString())).thenReturn("refresh-jwt");
+        when(jwtService.getAccessTokenSeconds()).thenReturn(900L);
 
-        ResponseEntity<?> response = handler.register(validRequest(), "Bearer valid-verified-token");
+        ResponseEntity<ApiResponse<RegisterCreatorResponse>> response =
+                handler.register(validRequest(), "Bearer valid-verified-token");
 
         assertEquals(201, response.getStatusCode().value());
-        verify(auditWriter).write(any());
+        RegisterCreatorResponse body = response.getBody().data();
+        assertNotNull(body);
+        assertEquals("session-jwt", body.sessionJwt());
+        assertEquals("refresh-jwt", body.refreshToken());
+        assertTrue(body.lockerInitRequired());
+        // USER_REGISTERED + SESSION_CREATED audit writes
+        verify(auditWriter, org.mockito.Mockito.times(2)).write(any());
     }
 
     @Test
@@ -97,7 +111,6 @@ class RegisterHandlerTest {
         RegisterCreatorRequest bad = new RegisterCreatorRequest(
                 "Test User", LocalDate.of(1990, 1, 1),
                 "+919876543210", "test@example.com", "Test Address",
-                "XXXX1234", "KYC-REF-001",
                 HIBP_PREFIX, HIBP_SUFFIX, true, 40,
                 "-----BEGIN PUBLIC KEY-----\ndata\n-----END PUBLIC KEY-----",
                 "fp", "enc==", "nonce==", "tag==", "a".repeat(64), 1, 12);
@@ -138,7 +151,6 @@ class RegisterHandlerTest {
         RegisterCreatorRequest bad = new RegisterCreatorRequest(
                 "Test User", LocalDate.of(1990, 1, 1),
                 "+919876543210", "test@example.com", "Test Address",
-                "XXXX1234", "KYC-REF-001",
                 HIBP_PREFIX, HIBP_SUFFIX, true, 80,
                 "-----BEGIN PUBLIC KEY-----\nMFkw\n-----END PUBLIC KEY-----",
                 "fp", "enc==", "nonce==", "tag==", "tooshort", 1, 12);
@@ -155,7 +167,6 @@ class RegisterHandlerTest {
         RegisterCreatorRequest bad = new RegisterCreatorRequest(
                 "Test User", LocalDate.of(1990, 1, 1),
                 "+919876543210", "test@example.com", "Test Address",
-                "XXXX1234", "KYC-REF-001",
                 HIBP_PREFIX, HIBP_SUFFIX, true, 80,
                 "-----BEGIN PUBLIC KEY-----\nMFkw\n-----END PUBLIC KEY-----",
                 "fp", "enc==", "nonce==", "tag==", "a".repeat(64), 1, 7);

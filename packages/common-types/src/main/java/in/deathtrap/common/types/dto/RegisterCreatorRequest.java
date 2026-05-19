@@ -10,8 +10,6 @@ public record RegisterCreatorRequest(
         @NotNull String mobile,
         @NotNull String email,
         String address,
-        String aadhaarRef,
-        String kycProviderRef,
         String hibpPrefix,
         String hibpSuffix,
         boolean hibpCheckResult,

@@ -80,7 +80,7 @@ public class ResolveDisputeHandler {
         Dispute dispute = disputeRows.get(0);
 
         if (!"open".equals(dispute.status()) && !"under_review".equals(dispute.status())) {
-            throw new AppException(ErrorCode.CONFLICT, "Dispute is already resolved");
+            throw AppException.recoverySessionDisputed("Dispute is already resolved");
         }
 
         String newSessionStatus = switch (request.resolution()) {

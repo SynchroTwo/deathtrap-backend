@@ -13,6 +13,7 @@ import in.deathtrap.common.types.enums.PartyType;
 import in.deathtrap.locker.config.AssetCatalogue;
 import in.deathtrap.locker.config.JwtService;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
@@ -64,14 +65,17 @@ public class InitLockerHandler {
 
         String lockerId = CsprngUtil.randomUlid();
         Instant now = Instant.now();
+        List<CategoryInit> categories = new ArrayList<>(AssetCatalogue.ALL.size());
 
         dbClient.withTransaction(status -> {
             dbClient.execute(INSERT_LOCKER, lockerId, creatorId, now, now);
             for (AssetCatalogue.AssetEntry entry : AssetCatalogue.ALL) {
+                String assetId = CsprngUtil.randomUlid();
                 dbClient.execute(INSERT_ASSET,
-                        CsprngUtil.randomUlid(), lockerId,
+                        assetId, lockerId,
                         entry.categoryCode(), entry.assetType().name().toLowerCase(),
                         now, now);
+                categories.add(new CategoryInit(assetId, entry.categoryCode(), "empty"));
             }
             return null;
         });
@@ -81,7 +85,7 @@ public class InitLockerHandler {
 
         String requestId = UUID.randomUUID().toString();
         return ResponseEntity.status(201).body(
-                ApiResponse.ok(new InitLockerResponse(lockerId, AssetCatalogue.ALL.size()), requestId));
+                ApiResponse.ok(new InitLockerResponse(lockerId, categories), requestId));
     }
 
     private JwtPayload validateCreatorJwt(String authHeader) {
@@ -95,5 +99,7 @@ public class InitLockerHandler {
         return jwt;
     }
 
-    private record InitLockerResponse(String lockerId, int assetCount) {}
+    private record InitLockerResponse(String lockerId, List<CategoryInit> categories) {}
+
+    private record CategoryInit(String id, String code, String status) {}
 }

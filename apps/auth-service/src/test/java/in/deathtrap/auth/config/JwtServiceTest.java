@@ -75,13 +75,13 @@ class JwtServiceTest {
     }
 
     @Test
-    void validateVerifiedToken_withSessionJwt_throwsSessionInvalid() {
+    void validateVerifiedToken_withSessionJwt_throwsInvalidVerifiedToken() {
         String sessionToken = jwtService.issueToken("user-1", PartyType.CREATOR, "session-1");
 
         AppException ex = assertThrows(AppException.class,
                 () -> jwtService.validateVerifiedToken(sessionToken));
 
-        assertEquals(ErrorCode.AUTH_SESSION_INVALID, ex.getErrorCode());
+        assertEquals(ErrorCode.AUTH_INVALID_VERIFIED_TOKEN, ex.getErrorCode());
     }
 
     @Test

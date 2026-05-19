@@ -87,10 +87,10 @@ public class RaiseDisputeHandler {
         }
 
         if ("completed".equals(session.status())) {
-            throw new AppException(ErrorCode.CONFLICT, "Session already completed.");
+            throw AppException.recoverySessionDisputed("Session already completed.");
         }
         if ("disputed".equals(session.status())) {
-            throw new AppException(ErrorCode.CONFLICT, "Dispute already raised.");
+            throw AppException.recoverySessionDisputed("Dispute already raised.");
         }
 
         String disputeId = CsprngUtil.randomUlid();

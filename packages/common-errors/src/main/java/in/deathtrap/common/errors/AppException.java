@@ -138,4 +138,31 @@ public class AppException extends RuntimeException {
     public static AppException rateLimited() {
         return new AppException(ErrorCode.RATE_LIMITED);
     }
+
+    /** Returns an exception for OTP-specific rate limiting. */
+    public static AppException otpRateLimited() {
+        return new AppException(ErrorCode.OTP_RATE_LIMITED);
+    }
+
+    /** Returns an exception for an invalid or expired verified-OTP token. */
+    public static AppException invalidVerifiedToken() {
+        return new AppException(ErrorCode.AUTH_INVALID_VERIFIED_TOKEN);
+    }
+
+    /** Returns an exception for a locker blob optimistic-lock conflict. */
+    public static AppException lockerVersionConflict(int expectedVersion, int actualVersion) {
+        return new AppException(ErrorCode.LOCKER_VERSION_CONFLICT,
+                Map.of("expectedVersion", expectedVersion, "actualVersion", actualVersion));
+    }
+
+    /** Returns an exception for a recovery session that is in disputed state. */
+    public static AppException recoverySessionDisputed(String detail) {
+        return new AppException(ErrorCode.RECOVERY_SESSION_DISPUTED, Map.of("detail", detail));
+    }
+
+    /** Returns an exception when a trigger lacks the required confirming signal sources. */
+    public static AppException triggerInsufficientSources(int received, int required) {
+        return new AppException(ErrorCode.TRIGGER_INSUFFICIENT_SOURCES,
+                Map.of("sourcesReceived", received, "sourcesRequired", required));
+    }
 }

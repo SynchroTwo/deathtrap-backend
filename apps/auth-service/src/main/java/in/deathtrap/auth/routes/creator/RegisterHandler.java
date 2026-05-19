@@ -9,11 +9,13 @@ import in.deathtrap.common.db.DbClient;
 import in.deathtrap.common.errors.AppException;
 import in.deathtrap.common.types.api.ApiResponse;
 import in.deathtrap.common.types.dto.RegisterCreatorRequest;
+import in.deathtrap.common.types.dto.RegisterCreatorResponse;
 import in.deathtrap.common.types.enums.AuditEventType;
 import in.deathtrap.common.types.enums.AuditResult;
 import in.deathtrap.common.types.enums.PartyType;
 import jakarta.validation.Valid;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -38,15 +40,16 @@ public class RegisterHandler {
     private static final String PUBKEY_HEADER = "-----BEGIN PUBLIC KEY-----";
     private static final int SALT_HEX_LENGTH = 64;
     private static final int MIN_ENTROPY_BITS = 60;
+    private static final long SESSION_DAYS = 7L;
 
     private static final String SELECT_BY_MOBILE =
             "SELECT user_id FROM users WHERE mobile = ? AND deleted_at IS NULL LIMIT 1";
     private static final String SELECT_BY_EMAIL =
             "SELECT user_id FROM users WHERE email = ? AND deleted_at IS NULL LIMIT 1";
     private static final String INSERT_USER =
-            "INSERT INTO users (user_id, full_name, date_of_birth, mobile, email, address, aadhaar_ref, " +
+            "INSERT INTO users (user_id, full_name, date_of_birth, mobile, email, address, " +
             "kyc_status, status, inactivity_trigger_months, locker_completeness_pct, created_at, updated_at) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending'::kyc_status_enum, 'active'::user_status_enum, ?, 0, ?, ?)";
+            "VALUES (?, ?, ?, ?, ?, ?, 'pending'::kyc_status_enum, 'active'::user_status_enum, ?, 0, ?, ?)";
     private static final String INSERT_SALT =
             "INSERT INTO party_salts (salt_id, party_id, party_type, salt_hex, schema_version, created_at) " +
             "VALUES (?, ?, 'creator'::party_type_enum, ?, ?, ?)";
@@ -58,11 +61,9 @@ public class RegisterHandler {
             "INSERT INTO encrypted_privkey_blobs (privkey_blob_id, party_id, party_type, pubkey_id, " +
             "ciphertext_b64, nonce_b64, auth_tag_b64, schema_version, version, is_active, activated_at, created_at) " +
             "VALUES (?, ?, 'creator'::party_type_enum, ?, ?, ?, ?, ?, 1, true, ?, ?)";
-    private static final String INSERT_KYC_FLAG =
-            "INSERT INTO kyc_flags (kyc_id, party_id, party_type, kyc_type, passed, checked_at, metadata) " +
-            "VALUES (?, ?, 'creator'::party_type_enum, 'aadhaar_otp'::kyc_type_enum, true, ?, ?::jsonb)";
-    private static final String UPDATE_KYC_STATUS =
-            "UPDATE users SET kyc_status = 'verified'::kyc_status_enum, updated_at = ? WHERE user_id = ?";
+    private static final String INSERT_SESSION =
+            "INSERT INTO sessions (session_id, party_id, party_type, jwt_jti, expires_at, created_at) " +
+            "VALUES (?, ?, 'creator'::party_type_enum, ?, ?, ?)";
 
     private static final RowMapper<String> ID_MAPPER = (rs, row) -> rs.getString(1);
 
@@ -80,9 +81,10 @@ public class RegisterHandler {
         this.hibpClient = hibpClient;
     }
 
-    /** POST /auth/register — atomically creates user + crypto records in one transaction. */
+    /** POST /auth/register — atomically creates user + crypto records + session in one transaction;
+     *  returns session + refresh tokens so the client is logged in immediately. */
     @PostMapping("/register")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> register(
+    public ResponseEntity<ApiResponse<RegisterCreatorResponse>> register(
             @RequestBody @Valid RegisterCreatorRequest request,
             @RequestHeader("Authorization") String authHeader) {
 
@@ -111,36 +113,37 @@ public class RegisterHandler {
         String saltId = CsprngUtil.randomUlid();
         String pubkeyId = CsprngUtil.randomUlid();
         String privkeyBlobId = CsprngUtil.randomUlid();
-        String kycFlagId = CsprngUtil.randomUlid();
+        String sessionId = CsprngUtil.randomUlid();
         Instant now = Instant.now();
-
-        // SECURITY-STUB: Aadhaar eKYC not implemented — Sprint 9 will call real UIDAI API
-        String kycMetadata = String.format(
-                "{\"stub\":true,\"aadhaar_ref\":\"%s\",\"kyc_provider_ref\":\"%s\"}",
-                request.aadhaarRef() != null ? request.aadhaarRef() : "",
-                request.kycProviderRef() != null ? request.kycProviderRef() : "");
-        log.info("[KYC-STUB] Aadhaar eKYC skipped for userId={}", userId);
+        Instant sessionExpiresAt = now.plus(SESSION_DAYS, ChronoUnit.DAYS);
 
         dbClient.withTransaction(status -> {
             dbClient.execute(INSERT_USER,
                     userId, request.fullName(), request.dateOfBirth(),
                     request.mobile(), request.email(), request.address(),
-                    request.aadhaarRef(), request.inactivityTriggerMonths(), now, now);
+                    request.inactivityTriggerMonths(), now, now);
             dbClient.execute(INSERT_SALT, saltId, userId, request.saltHex(), request.schemaVersion(), now);
             dbClient.execute(INSERT_PUBKEY, pubkeyId, userId, request.publicKeyPem(), request.keyFingerprint(), now, now);
             dbClient.execute(INSERT_PRIVKEY_BLOB, privkeyBlobId, userId, pubkeyId,
                     request.encryptedPrivkeyB64(), request.nonceB64(), request.authTagB64(),
                     request.schemaVersion(), now, now);
-            dbClient.execute(INSERT_KYC_FLAG, kycFlagId, userId, now, kycMetadata);
-            dbClient.execute(UPDATE_KYC_STATUS, now, userId);
+            dbClient.execute(INSERT_SESSION, sessionId, userId, sessionId, sessionExpiresAt, now);
             return null;
         });
 
+        String sessionJwt = jwtService.issueToken(userId, PartyType.CREATOR, sessionId);
+        String refreshToken = jwtService.issueRefreshToken(userId, PartyType.CREATOR, sessionId);
+        Instant accessTokenExpiresAt = now.plusSeconds(jwtService.getAccessTokenSeconds());
+
         auditWriter.write(AuditWritePayload.builder(AuditEventType.USER_REGISTERED, AuditResult.SUCCESS)
                 .actorId(userId).actorType(PartyType.CREATOR).targetId(userId).targetType("user").build());
+        auditWriter.write(AuditWritePayload.builder(AuditEventType.SESSION_CREATED, AuditResult.SUCCESS)
+                .actorId(userId).actorType(PartyType.CREATOR).sessionId(sessionId).build());
 
         String requestId = UUID.randomUUID().toString();
-        return ResponseEntity.status(201).body(ApiResponse.ok(Map.of("userId", userId), requestId));
+        RegisterCreatorResponse body = new RegisterCreatorResponse(
+                userId, sessionJwt, refreshToken, accessTokenExpiresAt.toString(), true);
+        return ResponseEntity.status(201).body(ApiResponse.ok(body, requestId));
     }
 
     private void validateRequest(RegisterCreatorRequest request) {

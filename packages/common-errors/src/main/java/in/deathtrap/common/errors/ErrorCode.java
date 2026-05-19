@@ -7,9 +7,11 @@ public enum ErrorCode {
     AUTH_OTP_INVALID(400, "OTP is invalid"),
     AUTH_OTP_EXPIRED(400, "OTP has expired"),
     AUTH_OTP_LOCKED(429, "Too many failed attempts. OTP locked."),
+    OTP_RATE_LIMITED(429, "Too many OTP requests"),
     AUTH_SESSION_INVALID(401, "Session is invalid"),
     AUTH_SESSION_EXPIRED(401, "Session has expired"),
     AUTH_SESSION_REVOKED(401, "Session has been revoked"),
+    AUTH_INVALID_VERIFIED_TOKEN(401, "Verified-OTP token is invalid or expired"),
     AUTH_UNAUTHORIZED(401, "Authentication required"),
     AUTH_FORBIDDEN(403, "Access denied"),
     AUTH_KYC_FAILED(422, "KYC verification failed"),
@@ -24,6 +26,11 @@ public enum ErrorCode {
     // Resource
     NOT_FOUND(404, "Resource not found"),
     CONFLICT(409, "Conflict"),
+    LOCKER_VERSION_CONFLICT(409, "Locker blob version conflict"),
+    RECOVERY_SESSION_DISPUTED(409, "Recovery session is disputed"),
+
+    // Trigger
+    TRIGGER_INSUFFICIENT_SOURCES(400, "Insufficient signal sources for trigger"),
 
     // Server
     INTERNAL_ERROR(500, "An unexpected error occurred"),

@@ -82,7 +82,7 @@ class RaiseDisputeHandlerTest {
     }
 
     @Test
-    void completedSession_throwsConflict() {
+    void completedSession_throwsRecoverySessionDisputed() {
         when(jwtService.validateToken(anyString())).thenReturn(nomineeJwt());
         when(dbClient.query(anyString(), any(), any()))          // 1-vararg: session → completed
                 .thenReturn((List) List.of(inProgressSession("completed")));
@@ -92,11 +92,11 @@ class RaiseDisputeHandlerTest {
         AppException ex = assertThrows(AppException.class,
                 () -> handler.raiseDispute(req(), BEARER));
 
-        assertEquals(ErrorCode.CONFLICT, ex.getErrorCode());
+        assertEquals(ErrorCode.RECOVERY_SESSION_DISPUTED, ex.getErrorCode());
     }
 
     @Test
-    void alreadyDisputed_throwsConflict() {
+    void alreadyDisputed_throwsRecoverySessionDisputed() {
         when(jwtService.validateToken(anyString())).thenReturn(nomineeJwt());
         when(dbClient.query(anyString(), any(), any()))          // 1-vararg: session → disputed
                 .thenReturn((List) List.of(inProgressSession("disputed")));
@@ -106,7 +106,7 @@ class RaiseDisputeHandlerTest {
         AppException ex = assertThrows(AppException.class,
                 () -> handler.raiseDispute(req(), BEARER));
 
-        assertEquals(ErrorCode.CONFLICT, ex.getErrorCode());
+        assertEquals(ErrorCode.RECOVERY_SESSION_DISPUTED, ex.getErrorCode());
     }
 
     @Test

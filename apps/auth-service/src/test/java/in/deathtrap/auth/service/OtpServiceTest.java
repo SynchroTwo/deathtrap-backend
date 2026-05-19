@@ -59,14 +59,14 @@ class OtpServiceTest {
     }
 
     @Test
-    void checkRateLimit_atLimit_throwsRateLimited() {
+    void checkRateLimit_atLimit_throwsOtpRateLimited() {
         // queryOne(sql, mapper, partyId, purpose) = 2 varargs → 4 matchers
         when(dbClient.queryOne(anyString(), any(), any(), any())).thenReturn(Optional.of(3));
 
         AppException ex = assertThrows(AppException.class,
                 () -> otpService.checkRateLimit("party-1", OtpPurpose.REGISTRATION));
 
-        assertEquals(ErrorCode.RATE_LIMITED, ex.getErrorCode());
+        assertEquals(ErrorCode.OTP_RATE_LIMITED, ex.getErrorCode());
     }
 
     @Test

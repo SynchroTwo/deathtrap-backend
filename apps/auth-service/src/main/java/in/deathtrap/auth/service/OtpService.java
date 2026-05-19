@@ -87,7 +87,7 @@ public class OtpService {
 
     /**
      * Checks rate limit (max 3 OTPs per party per hour per purpose).
-     * Throws AppException.rateLimited() if exceeded.
+     * Throws AppException.otpRateLimited() if exceeded.
      */
     public void checkRateLimit(String partyId, OtpPurpose purpose) {
         Integer count = dbClient.queryOne(COUNT_HOURLY_OTPS,
@@ -95,7 +95,7 @@ public class OtpService {
                 partyId, purpose.name().toLowerCase()).orElse(0);
         if (count >= RATE_LIMIT_PER_HOUR) {
             log.warn("OTP rate limit exceeded for partyId={} purpose={}", partyId, purpose);
-            throw AppException.rateLimited();
+            throw AppException.otpRateLimited();
         }
     }
 

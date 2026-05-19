@@ -53,7 +53,7 @@ class InviteNomineeHandlerTest {
 
     private User activeUser() {
         return new User("creator-1", "Bob Creator", LocalDate.of(1980, 1, 1),
-                "+919900000001", "bob@example.com", null, null, null,
+                "+919900000001", "bob@example.com", null, null,
                 KycStatus.VERIFIED, UserStatus.ACTIVE,
                 null, null, 0, null, 12,
                 Instant.now(), Instant.now(), null);
@@ -61,7 +61,7 @@ class InviteNomineeHandlerTest {
 
     private User suspendedUser() {
         return new User("creator-1", "Bob Creator", LocalDate.of(1980, 1, 1),
-                "+919900000001", "bob@example.com", null, null, null,
+                "+919900000001", "bob@example.com", null, null,
                 KycStatus.VERIFIED, UserStatus.SUSPENDED,
                 null, null, 0, null, 12,
                 Instant.now(), Instant.now(), null);

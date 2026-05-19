@@ -5,8 +5,10 @@ import in.deathtrap.common.audit.AuditWriter;
 import in.deathtrap.common.db.DbClient;
 import in.deathtrap.common.errors.AppException;
 import in.deathtrap.common.errors.ErrorCode;
+import in.deathtrap.common.types.api.ApiResponse;
 import in.deathtrap.common.types.domain.User;
 import in.deathtrap.common.types.dto.LoginRequest;
+import in.deathtrap.common.types.dto.LoginResponse;
 import in.deathtrap.common.types.enums.KycStatus;
 import in.deathtrap.common.types.enums.PartyType;
 import in.deathtrap.common.types.enums.UserStatus;
@@ -21,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -49,7 +52,7 @@ class LoginHandlerTest {
 
     private User activeUser() {
         return new User("user-1", "Test User", LocalDate.of(1990, 1, 1),
-                "+919876543210", "test@example.com", null, null, null,
+                "+919876543210", "test@example.com", null, null,
                 KycStatus.VERIFIED, UserStatus.ACTIVE,
                 null, null, 0, null, 12,
                 Instant.now(), Instant.now(), null);
@@ -60,16 +63,31 @@ class LoginHandlerTest {
     }
 
     @Test
-    void validLogin_returnsAccessTokenAndSessionId() {
+    void validLogin_returnsTokensAndCryptoMaterial() {
         doNothing().when(jwtService).validateVerifiedToken(anyString());
+        // 4 sequential queryOne calls: OTP, user, salt, privkey blob
         when(dbClient.queryOne(anyString(), any(), anyString()))
-                .thenReturn(Optional.of("otp-id-1"))   // verified login OTP row exists
-                .thenReturn(Optional.of(activeUser())); // user lookup
-        when(jwtService.issueToken(anyString(), any(PartyType.class), anyString())).thenReturn("jwt-token");
+                .thenReturn(Optional.of("otp-id-1"))
+                .thenReturn(Optional.of(activeUser()))
+                .thenReturn(Optional.of("a".repeat(64)))
+                .thenReturn(Optional.of(new LoginHandler.PrivkeyBlob("ct==", "n==", "tg==")));
+        when(jwtService.issueToken(anyString(), any(PartyType.class), anyString())).thenReturn("session-jwt");
+        when(jwtService.issueRefreshToken(anyString(), any(PartyType.class), anyString())).thenReturn("refresh-jwt");
+        when(jwtService.getAccessTokenSeconds()).thenReturn(900L);
 
-        ResponseEntity<?> response = handler.login(validRequest(), VALID_TOKEN);
+        ResponseEntity<ApiResponse<LoginResponse>> response = handler.login(validRequest(), VALID_TOKEN);
 
         assertEquals(200, response.getStatusCode().value());
+        LoginResponse body = response.getBody().data();
+        assertNotNull(body);
+        assertEquals("user-1", body.userId());
+        assertEquals("creator", body.partyType());
+        assertEquals("session-jwt", body.sessionJwt());
+        assertEquals("refresh-jwt", body.refreshToken());
+        assertEquals("a".repeat(64), body.saltHex());
+        assertEquals("ct==", body.encryptedPrivkeyB64());
+        assertEquals("n==", body.encryptedPrivkeyNonceB64());
+        assertEquals("tg==", body.encryptedPrivkeyTagB64());
     }
 
     @Test
@@ -94,8 +112,8 @@ class LoginHandlerTest {
     void mobileNotFound_throwsNotFound() {
         doNothing().when(jwtService).validateVerifiedToken(anyString());
         when(dbClient.queryOne(anyString(), any(), anyString()))
-                .thenReturn(Optional.of("otp-id-1"))   // verified OTP row OK
-                .thenReturn(Optional.empty());          // but no user with this mobile
+                .thenReturn(Optional.of("otp-id-1"))
+                .thenReturn(Optional.empty());
 
         AppException ex = assertThrows(AppException.class,
                 () -> handler.login(validRequest(), VALID_TOKEN));
@@ -106,7 +124,7 @@ class LoginHandlerTest {
     @Test
     void userStatusSuspended_throwsForbidden() {
         User suspended = new User("user-1", "Test User", LocalDate.of(1990, 1, 1),
-                "+919876543210", "test@example.com", null, null, null,
+                "+919876543210", "test@example.com", null, null,
                 KycStatus.VERIFIED, UserStatus.SUSPENDED,
                 null, null, 0, null, 12,
                 Instant.now(), Instant.now(), null);
