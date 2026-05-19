@@ -52,7 +52,7 @@ class UploadBlobHandlerTest {
     }
 
     private UploadBlobRequest validRequest() {
-        return new UploadBlobRequest("dGVzdA==", 1000L, VALID_HASH, 1);
+        return new UploadBlobRequest("dGVzdA==", 1000L, VALID_HASH, 1, null);
     }
 
     // SELECT_LOCKER takes 1 vararg (creatorId) → 3 matchers total
@@ -101,7 +101,7 @@ class UploadBlobHandlerTest {
     @Test
     void sizeBytesTooLarge_throwsValidationFailed() {
         when(jwtService.validateToken(anyString())).thenReturn(creatorJwt());
-        UploadBlobRequest oversized = new UploadBlobRequest("dGVzdA==", 100_000_001L, VALID_HASH, 1);
+        UploadBlobRequest oversized = new UploadBlobRequest("dGVzdA==", 100_000_001L, VALID_HASH, 1, null);
 
         AppException ex = assertThrows(AppException.class,
                 () -> handler.uploadBlob("bank_accounts", oversized, BEARER));
@@ -119,6 +119,43 @@ class UploadBlobHandlerTest {
         when(dbClient.withTransaction(any())).thenReturn(null);
 
         ResponseEntity<?> response = handler.uploadBlob("bank_accounts", validRequest(), BEARER);
+
+        assertEquals(200, response.getStatusCode().value());
+    }
+
+    @Test
+    void expectedVersionMismatch_throwsLockerVersionConflict() {
+        when(jwtService.validateToken(anyString())).thenReturn(creatorJwt());
+        when(dbClient.query(anyString(), any(), any()))
+                .thenReturn(List.of("locker-1"));
+        when(dbClient.query(anyString(), any(), any(), any()))
+                .thenReturn(List.of(activeAsset()));
+        // SELECT_CURRENT_VERSION returns 5
+        when(dbClient.queryOne(anyString(), any(), anyString()))
+                .thenReturn(java.util.Optional.of(5));
+
+        UploadBlobRequest stale = new UploadBlobRequest("dGVzdA==", 1000L, VALID_HASH, 1, 3);
+
+        AppException ex = assertThrows(AppException.class,
+                () -> handler.uploadBlob("bank_accounts", stale, BEARER));
+
+        assertEquals(ErrorCode.LOCKER_VERSION_CONFLICT, ex.getErrorCode());
+    }
+
+    @Test
+    void expectedVersionMatches_proceedsToUpload() {
+        when(jwtService.validateToken(anyString())).thenReturn(creatorJwt());
+        when(dbClient.query(anyString(), any(), any()))
+                .thenReturn(List.of("locker-1"));
+        when(dbClient.query(anyString(), any(), any(), any()))
+                .thenReturn(List.of(activeAsset()));
+        when(dbClient.queryOne(anyString(), any(), anyString()))
+                .thenReturn(java.util.Optional.of(5));
+        when(dbClient.withTransaction(any())).thenReturn(null);
+
+        UploadBlobRequest fresh = new UploadBlobRequest("dGVzdA==", 1000L, VALID_HASH, 1, 5);
+
+        ResponseEntity<?> response = handler.uploadBlob("bank_accounts", fresh, BEARER);
 
         assertEquals(200, response.getStatusCode().value());
     }

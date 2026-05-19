@@ -55,7 +55,10 @@ class DownloadBlobHandlerTest {
     private BlobVersion activeBlobVersion() {
         return new BlobVersion("blob-1", "asset-1", "locker-1",
                 "locker/locker-1/bank_accounts/blob-1", 5000L, "a".repeat(64),
-                1, true, Instant.now(), null);
+                1, 1, true, Instant.now(), null);
+        //      ^  ^
+        //      |  + version (A2): monotonic per-asset
+        //      + schemaVersion: crypto format rev
     }
 
     // SELECT_LOCKER_FOR_* takes 1 vararg (partyId) → 3 matchers total

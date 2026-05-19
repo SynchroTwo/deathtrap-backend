@@ -44,7 +44,7 @@ public class SyncPullHandler {
             "FROM nominee_assignments WHERE locker_id = ? AND (created_at > ? OR updated_at > ?)";
     private static final String SELECT_BLOBS_CHANGED =
             "SELECT bv.blob_id, bv.asset_id, bv.locker_id, bv.s3_key, bv.size_bytes, " +
-            "bv.content_hash_sha256, bv.schema_version, bv.is_current, bv.created_at, bv.updated_at " +
+            "bv.content_hash_sha256, bv.schema_version, bv.version, bv.is_current, bv.created_at, bv.updated_at " +
             "FROM blob_versions bv " +
             "JOIN asset_index ai ON bv.asset_id = ai.asset_id " +
             "WHERE ai.locker_id = ? AND bv.is_current = TRUE AND bv.created_at > ?";
@@ -210,6 +210,7 @@ public class SyncPullHandler {
         m.put("size_bytes", b.sizeBytes());
         m.put("content_hash_sha256", b.contentHashSha256());
         m.put("schema_version", b.schemaVersion());
+        m.put("version", b.version());
         m.put("is_current", b.isCurrent());
         m.put("created_at", b.createdAt().toEpochMilli());
         m.put("updated_at", b.updatedAt() != null ? b.updatedAt().toEpochMilli() : null);

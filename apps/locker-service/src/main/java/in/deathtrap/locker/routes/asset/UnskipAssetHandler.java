@@ -21,23 +21,22 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Handles marking an empty asset category as intentionally skipped. */
+/** Handles reverting an intentionally skipped asset back to empty. */
 @RestController
 @RequestMapping("/locker/asset")
-public class SkipAssetHandler {
+public class UnskipAssetHandler {
 
     private static final String SELECT_LOCKER =
             "SELECT locker_id FROM locker_meta WHERE user_id = ? LIMIT 1";
     private static final String SELECT_ASSET =
             "SELECT asset_id, locker_id, category_code, asset_type, status, created_at, updated_at " +
             "FROM asset_index WHERE locker_id = ? AND category_code = ? LIMIT 1";
-    private static final String UPDATE_SKIP =
-            "UPDATE asset_index SET status = 'skipped'::asset_status_enum, updated_at = NOW() " +
+    private static final String UPDATE_UNSKIP =
+            "UPDATE asset_index SET status = 'empty'::asset_status_enum, updated_at = NOW() " +
             "WHERE asset_id = ?";
     private static final String UPDATE_COMPLETENESS =
             "UPDATE locker_meta SET completeness_pct = ?, online_pct = ?, offline_pct = ?, " +
@@ -50,8 +49,7 @@ public class SkipAssetHandler {
     private final AuditWriter auditWriter;
     private final CompletenessCalculator completenessCalculator;
 
-    /** Constructs SkipAssetHandler with required dependencies. */
-    public SkipAssetHandler(DbClient dbClient, JwtService jwtService,
+    public UnskipAssetHandler(DbClient dbClient, JwtService jwtService,
             AuditWriter auditWriter, CompletenessCalculator completenessCalculator) {
         this.dbClient = dbClient;
         this.jwtService = jwtService;
@@ -59,12 +57,10 @@ public class SkipAssetHandler {
         this.completenessCalculator = completenessCalculator;
     }
 
-    /** PATCH /locker/asset/{categoryCode}/skip — marks an empty asset as skipped.
-     *  Accepts an optional {@code reason} in the body for audit metadata. */
-    @PatchMapping("/{categoryCode}/skip")
-    public ResponseEntity<ApiResponse<SkipAssetResponse>> skipAsset(
+    /** PATCH /locker/asset/{categoryCode}/unskip — flips skipped back to empty. */
+    @PatchMapping("/{categoryCode}/unskip")
+    public ResponseEntity<ApiResponse<UnskipAssetResponse>> unskipAsset(
             @PathVariable String categoryCode,
-            @RequestBody(required = false) SkipAssetRequest body,
             @RequestHeader("Authorization") String authHeader) {
 
         JwtPayload jwt = validateCreatorJwt(authHeader);
@@ -82,32 +78,26 @@ public class SkipAssetHandler {
         }
         AssetIndex asset = assetRows.get(0);
 
-        if ("filled".equals(asset.status())) {
-            throw AppException.conflict("Cannot skip an asset with uploaded data. Delete the blob first.");
+        if (!"skipped".equals(asset.status())) {
+            throw AppException.conflict("Asset is not currently skipped (status=" + asset.status() + ")");
         }
 
         dbClient.withTransaction(status -> {
-            dbClient.execute(UPDATE_SKIP, asset.assetId());
+            dbClient.execute(UPDATE_UNSKIP, asset.assetId());
             CompletenessScore score = completenessCalculator.recalculate(lockerId);
             dbClient.execute(UPDATE_COMPLETENESS,
                     score.overall(), score.onlinePct(), score.offlinePct(), lockerId);
             return null;
         });
 
-        String reason = body != null ? body.reason() : null;
-        AuditWritePayload.Builder auditBuilder = AuditWritePayload
-                .builder(AuditEventType.ASSET_SKIPPED, AuditResult.SUCCESS)
-                .actorId(creatorId).actorType(PartyType.CREATOR).targetId(asset.assetId());
-        if (reason != null && !reason.isBlank()) {
-            auditBuilder.metadataJson(Map.of("categoryCode", categoryCode, "reason", reason));
-        } else {
-            auditBuilder.metadataJson(Map.of("categoryCode", categoryCode));
-        }
-        auditWriter.write(auditBuilder.build());
+        auditWriter.write(AuditWritePayload.builder(AuditEventType.ASSET_SKIPPED, AuditResult.SUCCESS)
+                .actorId(creatorId).actorType(PartyType.CREATOR).targetId(asset.assetId())
+                .metadataJson(Map.of("categoryCode", categoryCode, "action", "unskip"))
+                .build());
 
         String requestId = UUID.randomUUID().toString();
         return ResponseEntity.ok(ApiResponse.ok(
-                new SkipAssetResponse(categoryCode, "skipped"), requestId));
+                new UnskipAssetResponse(categoryCode, "empty"), requestId));
     }
 
     private JwtPayload validateCreatorJwt(String authHeader) {
@@ -121,8 +111,5 @@ public class SkipAssetHandler {
         return jwt;
     }
 
-    /** Optional body — clients may PATCH with no body, or include a reason for audit. */
-    public record SkipAssetRequest(String reason) {}
-
-    private record SkipAssetResponse(String categoryCode, String status) {}
+    private record UnskipAssetResponse(String categoryCode, String status) {}
 }

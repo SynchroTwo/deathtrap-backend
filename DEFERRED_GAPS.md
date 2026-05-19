@@ -3,24 +3,16 @@
 Backend gaps that are tracked but not yet implemented. Each item lists the
 related contract surface, the reason for deferral, and the workaround in place.
 
-## LOCKER_VERSION_CONFLICT — optimistic locking on blob upload
+## LOCKER_VERSION_CONFLICT — optimistic locking on blob upload ✅ RESOLVED in A2
 
-**Status:** error code published, no throw site.
-
-`packages/common-errors/.../ErrorCode.java` defines `LOCKER_VERSION_CONFLICT`
-(HTTP 409). `apps/locker-service/.../UploadBlobHandler.java` does not yet check
-an `expectedVersion` on incoming `UploadBlobRequest`; concurrent writes from
-two devices overwrite each other (last writer wins via the `SUPERSEDE_BLOBS`
-update).
-
-**To close:**
-- Add `expectedVersion` (nullable int) to `UploadBlobRequest`.
-- In the upload transaction, read the current `blob_versions.version` for the
-  asset; if `expectedVersion != null && expectedVersion != current`, throw
-  `AppException.lockerVersionConflict(expectedVersion, current)`.
-- Frontend already maps the code (Sprint A0 stub).
-
-**Target sprint:** locker concurrency hardening (post-A6).
+`expectedVersion` is now an optional field on `UploadBlobRequest`.
+`UploadBlobHandler` computes the current version via
+`SELECT COALESCE(MAX(version), 0) FROM blob_versions WHERE asset_id = ?`
+and throws `AppException.lockerVersionConflict(expected, actual)` when a
+client-supplied `expectedVersion` doesn't match. Migration V010 added the
+`blob_versions.version` column with a monotonic backfill keyed on
+`created_at`. Clients that omit `expectedVersion` retain last-writer-wins
+semantics.
 
 ## TRIGGER_INSUFFICIENT_SOURCES — multi-source threshold check
 

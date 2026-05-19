@@ -24,16 +24,16 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
-/** Unit tests for SkipAssetHandler — no Spring context. */
+/** Unit tests for UnskipAssetHandler — no Spring context. */
 @ExtendWith(MockitoExtension.class)
-class SkipAssetHandlerTest {
+class UnskipAssetHandlerTest {
 
     @Mock private DbClient dbClient;
     @Mock private JwtService jwtService;
     @Mock private AuditWriter auditWriter;
     @Mock private CompletenessCalculator completenessCalculator;
 
-    @InjectMocks private SkipAssetHandler handler;
+    @InjectMocks private UnskipAssetHandler handler;
 
     private static final String BEARER = "Bearer valid-jwt";
 
@@ -42,59 +42,49 @@ class SkipAssetHandlerTest {
                 Instant.now().getEpochSecond(), Instant.now().plusSeconds(900).getEpochSecond());
     }
 
+    private AssetIndex skippedAsset() {
+        return new AssetIndex("asset-1", "locker-1", "bank_accounts",
+                "online", "skipped", Instant.now(), Instant.now());
+    }
+
     private AssetIndex emptyAsset() {
         return new AssetIndex("asset-1", "locker-1", "bank_accounts",
                 "online", "empty", Instant.now(), Instant.now());
     }
 
-    private AssetIndex filledAsset() {
-        return new AssetIndex("asset-1", "locker-1", "bank_accounts",
-                "online", "filled", Instant.now(), Instant.now());
-    }
-
-    // SELECT_LOCKER takes 1 vararg (creatorId) → 3 matchers total
-    // SELECT_ASSET takes 2 varargs (lockerId, categoryCode) → 4 matchers total
-
     @Test
-    void emptyAsset_getsSkipped_returnsSkippedStatus() {
+    void skippedAsset_getsUnskipped_returnsEmptyStatus() {
         when(jwtService.validateToken(anyString())).thenReturn(creatorJwt());
-        when(dbClient.query(anyString(), any(), any()))          // 1-vararg: SELECT_LOCKER
+        when(dbClient.query(anyString(), any(), any()))
                 .thenReturn(List.of("locker-1"));
-        when(dbClient.query(anyString(), any(), any(), any()))   // 2-vararg: SELECT_ASSET
-                .thenReturn(List.of(emptyAsset()));
+        when(dbClient.query(anyString(), any(), any(), any()))
+                .thenReturn(List.of(skippedAsset()));
         when(dbClient.withTransaction(any())).thenReturn(null);
 
-        ResponseEntity<?> response = handler.skipAsset("bank_accounts", null, BEARER);
+        ResponseEntity<?> response = handler.unskipAsset("bank_accounts", BEARER);
 
         assertEquals(200, response.getStatusCode().value());
     }
 
     @Test
-    void emptyAsset_withReason_acceptsBody() {
+    void notCurrentlySkipped_throwsConflict() {
         when(jwtService.validateToken(anyString())).thenReturn(creatorJwt());
         when(dbClient.query(anyString(), any(), any()))
                 .thenReturn(List.of("locker-1"));
         when(dbClient.query(anyString(), any(), any(), any()))
                 .thenReturn(List.of(emptyAsset()));
-        when(dbClient.withTransaction(any())).thenReturn(null);
 
-        SkipAssetHandler.SkipAssetRequest body = new SkipAssetHandler.SkipAssetRequest("Not applicable");
-        ResponseEntity<?> response = handler.skipAsset("bank_accounts", body, BEARER);
+        AppException ex = assertThrows(AppException.class,
+                () -> handler.unskipAsset("bank_accounts", BEARER));
 
-        assertEquals(200, response.getStatusCode().value());
+        assertEquals(ErrorCode.CONFLICT, ex.getErrorCode());
     }
 
     @Test
-    void filledAsset_throwsConflict() {
-        when(jwtService.validateToken(anyString())).thenReturn(creatorJwt());
-        when(dbClient.query(anyString(), any(), any()))          // 1-vararg: SELECT_LOCKER
-                .thenReturn(List.of("locker-1"));
-        when(dbClient.query(anyString(), any(), any(), any()))   // 2-vararg: SELECT_ASSET
-                .thenReturn(List.of(filledAsset()));
-
+    void missingAuth_throwsUnauthorized() {
         AppException ex = assertThrows(AppException.class,
-                () -> handler.skipAsset("bank_accounts", null, BEARER));
+                () -> handler.unskipAsset("bank_accounts", null));
 
-        assertEquals(ErrorCode.CONFLICT, ex.getErrorCode());
+        assertEquals(ErrorCode.AUTH_UNAUTHORIZED, ex.getErrorCode());
     }
 }

@@ -22,6 +22,7 @@ public class BlobVersionRowMapper implements RowMapper<BlobVersionRowMapper.Blob
                 sizeBytes,
                 rs.getString("content_hash_sha256"),
                 rs.getInt("schema_version"),
+                rs.getInt("version"),
                 rs.getBoolean("is_current"),
                 rs.getTimestamp("created_at").toInstant(),
                 rs.getTimestamp("updated_at") != null ? rs.getTimestamp("updated_at").toInstant() : null);
@@ -36,6 +37,7 @@ public class BlobVersionRowMapper implements RowMapper<BlobVersionRowMapper.Blob
             Long sizeBytes,
             String contentHashSha256,
             int schemaVersion,
+            int version,
             boolean isCurrent,
             Instant createdAt,
             Instant updatedAt

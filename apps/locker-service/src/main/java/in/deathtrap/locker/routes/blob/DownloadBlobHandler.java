@@ -13,6 +13,7 @@ import in.deathtrap.locker.config.JwtService;
 import in.deathtrap.locker.rowmapper.BlobVersionRowMapper;
 import in.deathtrap.locker.rowmapper.BlobVersionRowMapper.BlobVersion;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -50,7 +51,7 @@ public class DownloadBlobHandler {
             "AND rb.status = 'active'::recovery_blob_status_enum LIMIT 1";
     private static final String SELECT_BLOB =
             "SELECT bv.blob_id, bv.asset_id, bv.locker_id, bv.s3_key, bv.size_bytes, " +
-            "bv.content_hash_sha256, bv.schema_version, bv.is_current, bv.created_at, bv.updated_at " +
+            "bv.content_hash_sha256, bv.schema_version, bv.version, bv.is_current, bv.created_at, bv.updated_at " +
             "FROM blob_versions bv " +
             "JOIN asset_index ai ON bv.asset_id = ai.asset_id " +
             "WHERE ai.locker_id = ? AND ai.category_code = ? AND bv.is_current = TRUE LIMIT 1";
@@ -95,15 +96,22 @@ public class DownloadBlobHandler {
         }
         BlobVersion blob = blobRows.get(0);
 
-        String presignedUrl = buildPresignedUrl(blob);
+        String downloadUrl = buildPresignedUrl(blob);
 
         auditWriter.write(AuditWritePayload.builder(AuditEventType.BLOB_ACCESSED, AuditResult.SUCCESS)
                 .actorId(partyId).actorType(partyType).targetId(blob.assetId()).build());
 
         String requestId = UUID.randomUUID().toString();
         return ResponseEntity.ok(ApiResponse.ok(
-                new DownloadBlobResponse(presignedUrl, PRESIGNED_URL_SECONDS,
-                        blob.contentHashSha256(), blob.sizeBytes(), blob.blobId()),
+                new DownloadBlobResponse(
+                        blob.blobId(),
+                        categoryCode,
+                        downloadUrl,
+                        PRESIGNED_URL_SECONDS,
+                        blob.contentHashSha256(),
+                        blob.sizeBytes(),
+                        blob.version(),
+                        blob.createdAt()),
                 requestId));
     }
 
@@ -139,10 +147,13 @@ public class DownloadBlobHandler {
     }
 
     private record DownloadBlobResponse(
-            String presignedUrl,
+            String blobVersionId,
+            String categoryCode,
+            String downloadUrl,
             int expiresInSeconds,
             String contentHashSha256,
             Long sizeBytes,
-            String blobVersionId
+            int version,
+            Instant uploadedAt
     ) {}
 }

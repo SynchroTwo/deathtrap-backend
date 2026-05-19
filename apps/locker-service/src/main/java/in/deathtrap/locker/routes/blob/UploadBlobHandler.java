@@ -51,13 +51,15 @@ public class UploadBlobHandler {
     private static final String SELECT_ASSET =
             "SELECT asset_id, locker_id, category_code, asset_type, status, created_at, updated_at " +
             "FROM asset_index WHERE locker_id = ? AND category_code = ? LIMIT 1";
+    private static final String SELECT_CURRENT_VERSION =
+            "SELECT COALESCE(MAX(version), 0) FROM blob_versions WHERE asset_id = ?";
     private static final String SUPERSEDE_BLOBS =
             "UPDATE blob_versions SET is_current = FALSE, updated_at = NOW() " +
             "WHERE asset_id = ? AND is_current = TRUE";
     private static final String INSERT_BLOB =
             "INSERT INTO blob_versions (blob_id, asset_id, locker_id, s3_key, size_bytes, " +
-            "content_hash_sha256, schema_version, is_current, created_at) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, ?)";
+            "content_hash_sha256, schema_version, version, is_current, created_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?)";
     private static final String UPDATE_ASSET_FILLED =
             "UPDATE asset_index SET status = 'filled'::asset_status_enum, updated_at = NOW() " +
             "WHERE asset_id = ?";
@@ -66,6 +68,7 @@ public class UploadBlobHandler {
             "last_saved_at = NOW(), updated_at = NOW() WHERE locker_id = ?";
 
     private static final RowMapper<String> STRING_MAPPER = (rs, row) -> rs.getString(1);
+    private static final RowMapper<Integer> INT_MAPPER = (rs, row) -> rs.getInt(1);
 
     private final DbClient dbClient;
     private final JwtService jwtService;
@@ -113,6 +116,12 @@ public class UploadBlobHandler {
         }
         AssetIndex asset = assetRows.get(0);
 
+        int currentVersion = dbClient.queryOne(SELECT_CURRENT_VERSION, INT_MAPPER, asset.assetId()).orElse(0);
+        if (request.expectedVersion() != null && request.expectedVersion() != currentVersion) {
+            throw AppException.lockerVersionConflict(request.expectedVersion(), currentVersion);
+        }
+        int newVersion = currentVersion + 1;
+
         String blobId = CsprngUtil.randomUlid();
         String s3Key = "locker/" + lockerId + "/" + categoryCode + "/" + blobId;
         putToS3OrDev(blobId, s3Key, request.encryptedBlobB64());
@@ -122,7 +131,7 @@ public class UploadBlobHandler {
         dbClient.withTransaction(status -> {
             dbClient.execute(SUPERSEDE_BLOBS, asset.assetId());
             dbClient.execute(INSERT_BLOB, blobId, asset.assetId(), lockerId, s3Key,
-                    request.sizeBytes(), request.contentHashSha256(), request.schemaVersion(), now);
+                    request.sizeBytes(), request.contentHashSha256(), request.schemaVersion(), newVersion, now);
             dbClient.execute(UPDATE_ASSET_FILLED, asset.assetId());
             CompletenessScore score = completenessCalculator.recalculate(lockerId);
             scoreBuf[0] = score.overall();
@@ -134,14 +143,15 @@ public class UploadBlobHandler {
         auditWriter.write(AuditWritePayload.builder(AuditEventType.BLOB_SAVED, AuditResult.SUCCESS)
                 .actorId(creatorId).actorType(PartyType.CREATOR).targetId(asset.assetId())
                 .metadataJson(Map.of("categoryCode", categoryCode,
-                        "sizeBytes", request.sizeBytes(), "blobVersionId", blobId))
+                        "sizeBytes", request.sizeBytes(), "blobVersionId", blobId, "version", newVersion))
                 .build());
 
-        log.info("Blob uploaded: lockerId={} categoryCode={} blobId={}", lockerId, categoryCode, blobId);
+        log.info("Blob uploaded: lockerId={} categoryCode={} blobId={} version={}",
+                lockerId, categoryCode, blobId, newVersion);
 
         String requestId = UUID.randomUUID().toString();
         return ResponseEntity.ok(ApiResponse.ok(
-                new UploadBlobResponse(blobId, categoryCode, request.sizeBytes(), now, scoreBuf[0]),
+                new UploadBlobResponse(blobId, categoryCode, request.sizeBytes(), now, scoreBuf[0], newVersion),
                 requestId));
     }
 
@@ -187,6 +197,7 @@ public class UploadBlobHandler {
             String categoryCode,
             long sizeBytes,
             Instant uploadedAt,
-            int completenessScore
+            int completenessScore,
+            int version
     ) {}
 }
