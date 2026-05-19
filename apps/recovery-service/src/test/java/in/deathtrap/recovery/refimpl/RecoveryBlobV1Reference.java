@@ -5,7 +5,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
 import java.security.MessageDigest;
-import java.security.Security;
 import java.security.interfaces.ECPrivateKey;
 import java.security.interfaces.ECPublicKey;
 import java.security.spec.PKCS8EncodedKeySpec;
@@ -18,7 +17,6 @@ import javax.crypto.KeyAgreement;
 import javax.crypto.Mac;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
 
 /**
  * Test-only Java reference implementation of Recovery Blob Format v1.
@@ -48,11 +46,9 @@ public final class RecoveryBlobV1Reference {
     private static final int GCM_TAG_BITS = 128;
     private static final int GCM_TAG_BYTES = 16;
 
-    static {
-        if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
-            Security.addProvider(new BouncyCastleProvider());
-        }
-    }
+    // No provider registration needed — AES/GCM/NoPadding, HmacSHA256, ECDH, and EC KeyFactory
+    // are all in the default JCE provider since Java 8. Avoiding BouncyCastle here keeps the
+    // dependency surface of this test-only class minimal.
 
     private RecoveryBlobV1Reference() {}
 
@@ -267,7 +263,7 @@ public final class RecoveryBlobV1Reference {
 
     /** Returns ciphertext || authTag(16 bytes) concatenated. */
     public static byte[] aesGcmEncrypt(byte[] key, byte[] nonce, byte[] aad, byte[] plaintext) throws GeneralSecurityException {
-        Cipher cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION, BouncyCastleProvider.PROVIDER_NAME);
+        Cipher cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION);
         cipher.init(Cipher.ENCRYPT_MODE,
                 new SecretKeySpec(key, "AES"),
                 new GCMParameterSpec(GCM_TAG_BITS, nonce));
@@ -277,7 +273,7 @@ public final class RecoveryBlobV1Reference {
 
     /** Input must be ciphertext || authTag(16 bytes) concatenated. */
     public static byte[] aesGcmDecrypt(byte[] key, byte[] nonce, byte[] aad, byte[] ctAndTag) throws GeneralSecurityException {
-        Cipher cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION, BouncyCastleProvider.PROVIDER_NAME);
+        Cipher cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION);
         cipher.init(Cipher.DECRYPT_MODE,
                 new SecretKeySpec(key, "AES"),
                 new GCMParameterSpec(GCM_TAG_BITS, nonce));
