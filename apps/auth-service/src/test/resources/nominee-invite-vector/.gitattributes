@@ -1,0 +1,3 @@
+# Frozen cross-impl vector inputs — never apply EOL normalization, or the
+# byte-exact canonicalJson assertion in InviteTokenVectorTest would break.
+* -text
