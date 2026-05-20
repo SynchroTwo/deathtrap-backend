@@ -91,6 +91,25 @@ Request (`POST /auth/nominee/accept`):
 - `pubkeyPem` stored in `party_public_keys.public_key_pem`; fingerprint computed server-side.
 - `encryptedPrivkeyB64/NonceB64/TagB64` → `encrypted_privkey_blobs.ciphertext_b64/nonce_b64/auth_tag_b64`.
 
+> **⚠️ UI mapping — these names differ from the creator-*register* pipeline.** The accept
+> body uses the long names below, not the register pipeline's `publicKeyPem`/`nonceB64`/
+> `authTagB64`/`saltHex`. The crypto pipeline may keep producing register-style internals;
+> the api-layer mapping must rename + re-encode on the way out:
+>
+> | register pipeline field | accept wire field | note |
+> |---|---|---|
+> | `publicKeyPem` | `pubkeyPem` | SPKI PEM |
+> | `nonceB64` | `encryptedPrivkeyNonceB64` | base64 |
+> | `authTagB64` | `encryptedPrivkeyTagB64` | base64 |
+> | (ciphertext) | `encryptedPrivkeyB64` | base64 |
+> | `saltHex` (hex) | `saltB64` (**base64 of the raw salt bytes**) | **encoding differs** |
+>
+> **Salt is the dangerous one:** hex digits are also valid base64, so sending the hex string
+> under `saltB64` does *not* 400 — the backend base64-decodes it into garbage and stores a
+> corrupt salt, after which the nominee can never re-derive their key. Send `base64(rawSaltBytes)`.
+> A name mismatch instead returns `400 VALIDATION_FAILED` with the offending field in
+> `error.details`.
+
 Response (extended beyond the zip's bare `sessionToken`, to match
 `LoginResponse`/`RegisterCreatorResponse` so `AuthContext.setSession` consumes it directly):
 
@@ -128,11 +147,20 @@ payload for audit.
 
 ---
 
-## 5. Go-live
+## 5. Go-live — DONE (staging)
+
+Status: **live on staging.** `V012` applied; auth-service redeployed; smoke-verified
+(`GET /auth/creator/{unknown}/pubkey` → 404 envelope, `POST /auth/nominee/accept` junk → 400).
 
 - **CORS:** new endpoints inherit the existing `/auth/*` allowlist (B8) — no CORS change.
-- **Migration:** apply `V012` to staging RDS before deploy.
-- **Deploy:** redeploy auth-service Lambda; flip UI `VITE_USE_MSW=false` once confirmed.
+- **Migration:** `V012` applied. Re-runnable via `scripts/migrate_staging.sh` (must run from a
+  VPC-attached CloudShell — Lambda subnet + Lambda SG — since the RDS is private-isolated).
+- **Invite-token contract:** cross-impl verified byte-exact against the UI vector
+  (`docs/NOMINEE_INVITE_TEST_VECTOR_V1.md` → `InviteTokenVectorTest`). Frozen.
+- **MSW flip (UI):** `VITE_USE_MSW` is a *global* flag — bypass MSW only for `/auth/nominees*`,
+  `/auth/nominee/accept`, `/auth/creator/:id/pubkey` and keep other mocks (auth/locker, and
+  recovery A4 — see §6) until those backends are also live on staging. Point
+  `VITE_API_BASE_URL` at the staging API URL.
 
 ---
 
