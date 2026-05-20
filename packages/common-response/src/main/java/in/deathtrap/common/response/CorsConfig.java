@@ -1,4 +1,4 @@
-package in.deathtrap.auth.config;
+package in.deathtrap.common.response;
 
 import java.util.Arrays;
 import java.util.List;
@@ -11,9 +11,10 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.CorsFilter;
 
 /**
- * Global CORS for browser clients.
+ * Global CORS for browser clients, shared by every HTTP service (auth/locker/recovery/
+ * trigger/audit pick it up via their {@code scanBasePackages = "in.deathtrap.common"}).
  *
- * <p>The API Gateway proxies {@code ANY} (including the {@code OPTIONS} preflight) to this
+ * <p>API Gateway proxies {@code ANY} (including the {@code OPTIONS} preflight) to each
  * Lambda, so CORS is handled here in Spring rather than at the gateway — no CDK change. The
  * {@link CorsFilter} runs at highest precedence so a preflight short-circuits with the
  * required headers before any handler/auth logic.
@@ -28,7 +29,7 @@ public class CorsConfig {
 
     /** Registers the global CORS filter ahead of all other filters. */
     @Bean
-    public FilterRegistrationBean<CorsFilter> corsFilter() {
+    public FilterRegistrationBean<CorsFilter> corsFilterRegistration() {
         CorsConfiguration cfg = new CorsConfiguration();
         cfg.setAllowedOriginPatterns(allowedOriginPatterns());
         cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
