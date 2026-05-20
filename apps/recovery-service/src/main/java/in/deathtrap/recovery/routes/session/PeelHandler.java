@@ -56,8 +56,9 @@ public class PeelHandler {
             "WHERE session_id = ? AND party_id = ? AND party_type = ?::party_type_enum LIMIT 1";
     private static final String INSERT_PEEL_EVENT =
             "INSERT INTO recovery_peel_events (peel_id, session_id, layer_id, party_id, " +
-            "party_type, layer_order, intermediate_hash, spec_version, peeled_at, created_at) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())";
+            "party_type, layer_order, intermediate_hash, intermediate_ciphertext_b64, " +
+            "spec_version, peeled_at, created_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())";
     private static final String SELECT_BLOB_SPEC_VERSION =
             "SELECT spec_version FROM recovery_blobs WHERE blob_id = ? LIMIT 1";
     private static final String UPDATE_SESSION_IN_PROGRESS =
@@ -158,14 +159,20 @@ public class PeelHandler {
         // historical peels from breaking on schema evolution.
         String specVersion = dbClient.queryOne(SELECT_BLOB_SPEC_VERSION, STRING_MAPPER, session.blobId())
                 .orElse(null);
+        int[] layerCountBuf = {0};
         String finalStatus = dbClient.withTransaction(status -> {
+            // Relay the opaque intermediate ciphertext (B-A6-1) so the next peeler can
+            // fetch it from GET /recovery/session/{id}. intermediate_hash is kept for
+            // integrity/forensics. Zero-knowledge preserved — ciphertext only, no key.
             dbClient.execute(INSERT_PEEL_EVENT, peelId, sessionId, myLayer.layerId(),
-                    partyId, partyTypeStr, myLayer.layerOrder(), intermediateHash, specVersion);
+                    partyId, partyTypeStr, myLayer.layerOrder(), intermediateHash,
+                    request.intermediateCiphertextB64(), specVersion);
             dbClient.execute(UPDATE_SESSION_IN_PROGRESS, sessionId);
 
             List<Integer> layerCountRows = dbClient.query(SELECT_LAYER_COUNT,
                     INT_MAPPER, session.blobId());
             int layerCount = layerCountRows.isEmpty() ? 0 : layerCountRows.get(0);
+            layerCountBuf[0] = layerCount;
             List<Integer> peelCountRows = dbClient.query(SELECT_PEEL_COUNT, INT_MAPPER, sessionId);
             int peelCount = peelCountRows.isEmpty() ? 0 : peelCountRows.get(0);
 
@@ -180,7 +187,8 @@ public class PeelHandler {
             return "in_progress";
         });
 
-        int remainingLayers = 0;
+        // True remaining count (B-A6-3): layers left to peel after this one.
+        int remainingLayers = Math.max(0, layerCountBuf[0] - myLayer.layerOrder());
         String nextRecipientPartyId = null;
         String nextRecipientPartyType = null;
         Instant completedAt = null;
@@ -193,7 +201,6 @@ public class PeelHandler {
             if (!nextPartyRows.isEmpty()) {
                 nextRecipientPartyId = nextPartyRows.get(0).partyId();
                 nextRecipientPartyType = nextPartyRows.get(0).partyType();
-                remainingLayers = 1;
             }
         }
 
@@ -216,7 +223,7 @@ public class PeelHandler {
     private record PeelResponse(
             String peelId,
             int layerOrder,
-            String sessionStatus,
+            String status,
             int remainingLayers,
             String nextRecipientPartyId,
             String nextRecipientPartyType,

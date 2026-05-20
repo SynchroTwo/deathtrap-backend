@@ -26,7 +26,7 @@ public class ThresholdService {
     private static final String SELECT_ACTIVE_TRIGGER =
             "SELECT trigger_id, creator_id, status, threshold_met, threshold_met_at, created_at " +
             "FROM trigger_events WHERE creator_id = ? " +
-            "AND status IN ('pending_threshold', 'threshold_met') ORDER BY created_at DESC LIMIT 1";
+            "AND status IN ('pending_threshold', 'threshold_met', 'approved') ORDER BY created_at DESC LIMIT 1";
     private static final String INSERT_TRIGGER =
             "INSERT INTO trigger_events (trigger_id, creator_id, status, threshold_met, created_at, updated_at) " +
             "VALUES (?, ?, 'pending_threshold', FALSE, NOW(), NOW())";
@@ -35,8 +35,11 @@ public class ThresholdService {
             "verified, received_at, created_at) VALUES (?, ?, ?, ?, TRUE, NOW(), NOW())";
     private static final String SELECT_VERIFIED_COUNT =
             "SELECT COUNT(*) FROM trigger_sources WHERE trigger_id = ? AND verified = TRUE";
+    // B-A6-2 (option 3.A): auto-promote straight to 'approved' at 2-of-3 so
+    // POST /recovery/session (which requires status approved/active) succeeds.
+    // The 48h timelock on the recovery SESSION remains the creator's safety window.
     private static final String UPDATE_THRESHOLD_MET =
-            "UPDATE trigger_events SET status = 'threshold_met', threshold_met = TRUE, " +
+            "UPDATE trigger_events SET status = 'approved', threshold_met = TRUE, " +
             "threshold_met_at = NOW(), updated_at = NOW() WHERE trigger_id = ?";
 
     private final DbClient db;

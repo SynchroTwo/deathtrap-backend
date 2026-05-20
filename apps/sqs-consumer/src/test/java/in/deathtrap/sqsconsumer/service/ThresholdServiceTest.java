@@ -73,6 +73,23 @@ class ThresholdServiceTest {
     }
 
     @Test
+    void thresholdMet_promotesTriggerToApproved() {
+        // B-A6-2: at 2-of-3 the trigger goes straight to 'approved' so
+        // POST /recovery/session (requires approved/active) succeeds.
+        when(db.queryOne(anyString(), any(), any()))
+                .thenReturn(Optional.of(pendingTrigger()))
+                .thenReturn(Optional.of(2));
+
+        service.processDeathSignal("creator-1", "MUNICIPALITY", "ref-approve");
+
+        verify(db).execute(
+                org.mockito.ArgumentMatchers.argThat(sql -> sql != null
+                        && sql.contains("status = 'approved'")
+                        && sql.contains("threshold_met = TRUE")),
+                org.mockito.ArgumentMatchers.eq("trg-1"));
+    }
+
+    @Test
     void duplicateSourceInsertFails_catchesContinues_noThreshold() {
         when(db.queryOne(anyString(), any(), any()))
                 .thenReturn(Optional.of(pendingTrigger()))

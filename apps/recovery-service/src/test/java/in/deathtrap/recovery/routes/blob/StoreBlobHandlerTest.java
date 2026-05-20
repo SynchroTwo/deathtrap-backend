@@ -57,20 +57,23 @@ class StoreBlobHandlerTest {
 
     /** Realistic-shaped SPKI PEM. Fingerprint computed below by the same algorithm
      *  the handler uses (strip PEM headers + whitespace, base64-decode, SHA-256 hex). */
+    // NOTE: second lines are 64 valid base64 chars each (distinct per party) so the
+    // SPKI body is decodable. The earlier literals were 65/66 chars → total length not a
+    // multiple of 4 → Base64.decode threw in the static init, failing the whole class.
     private static final String LAWYER_PEM =
             "-----BEGIN PUBLIC KEY-----\n" +
             "MFkwEwYHKoZIzj0CAQYFK4EEAAoDQgAExf7tQk/2I+aZkUm9HKTfLHvNRoFkOZD5\n" +
-            "lawyer123456789012345abcdefgh1234567890ABCDEFGHIJKLMNOPQRSTUVWX==\n" +
+            "ABCDEFGHABCDEFGHABCDEFGHABCDEFGHABCDEFGHABCDEFGHABCDEFGHABCDEFGH\n" +
             "-----END PUBLIC KEY-----";
     private static final String NOMINEE_1_PEM =
             "-----BEGIN PUBLIC KEY-----\n" +
             "MFkwEwYHKoZIzj0CAQYFK4EEAAoDQgAExf7tQk/2I+aZkUm9HKTfLHvNRoFkOZD5\n" +
-            "nominee1ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234==\n" +
+            "BCDEFGHIBCDEFGHIBCDEFGHIBCDEFGHIBCDEFGHIBCDEFGHIBCDEFGHIBCDEFGHI\n" +
             "-----END PUBLIC KEY-----";
     private static final String NOMINEE_2_PEM =
             "-----BEGIN PUBLIC KEY-----\n" +
             "MFkwEwYHKoZIzj0CAQYFK4EEAAoDQgAExf7tQk/2I+aZkUm9HKTfLHvNRoFkOZD5\n" +
-            "nominee2ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz5678==\n" +
+            "CDEFGHIJCDEFGHIJCDEFGHIJCDEFGHIJCDEFGHIJCDEFGHIJCDEFGHIJCDEFGHIJ\n" +
             "-----END PUBLIC KEY-----";
 
     private static final String LAWYER_FP = fingerprint(LAWYER_PEM);
@@ -258,7 +261,6 @@ class StoreBlobHandlerTest {
     void firstLayerIsNotLawyer_throwsRecoveryInvalidRecipientOrder() {
         when(jwtService.validateToken(anyString())).thenReturn(creatorJwt());
         doNothing().when(rateLimit).check(anyString());
-        when(dbClient.queryOne(anyString(), any(), anyString())).thenAnswer(this::routeQueryOneSingle);
 
         StoreBlobRequest bad = new StoreBlobRequest(
                 "v1", VALID_BLOB_ID, "dGVzdA==",
@@ -274,7 +276,6 @@ class StoreBlobHandlerTest {
     void duplicatePartyId_throwsRecoveryDuplicateRecipient() {
         when(jwtService.validateToken(anyString())).thenReturn(creatorJwt());
         doNothing().when(rateLimit).check(anyString());
-        when(dbClient.queryOne(anyString(), any(), anyString())).thenAnswer(this::routeQueryOneSingle);
 
         StoreBlobRequest bad = new StoreBlobRequest(
                 "v1", VALID_BLOB_ID, "dGVzdA==",
@@ -291,7 +292,6 @@ class StoreBlobHandlerTest {
     void layerOrderHasGap_throwsRecoveryInvalidLayerOrdering() {
         when(jwtService.validateToken(anyString())).thenReturn(creatorJwt());
         doNothing().when(rateLimit).check(anyString());
-        when(dbClient.queryOne(anyString(), any(), anyString())).thenAnswer(this::routeQueryOneSingle);
 
         StoreBlobRequest bad = new StoreBlobRequest(
                 "v1", VALID_BLOB_ID, "dGVzdA==",

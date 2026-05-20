@@ -47,9 +47,22 @@ public class GetSessionStatusHandler {
             "SELECT layer_id, blob_id, layer_order, party_id, party_type, pubkey_id, " +
             "key_fingerprint, created_at " +
             "FROM recovery_blob_layers WHERE blob_id = ? AND layer_order = ? LIMIT 1";
+    private static final String SELECT_BLOB_RELAY =
+            "SELECT salt_hex, encrypted_blob_b64 FROM recovery_blobs WHERE blob_id = ? LIMIT 1";
+    private static final String SELECT_LATEST_INTERMEDIATE =
+            "SELECT intermediate_ciphertext_b64 FROM recovery_peel_events " +
+            "WHERE session_id = ? ORDER BY layer_order DESC LIMIT 1";
+    private static final String SELECT_LAYERS =
+            "SELECT layer_order, party_id, party_type, key_fingerprint " +
+            "FROM recovery_blob_layers WHERE blob_id = ? ORDER BY layer_order ASC";
 
     private static final RowMapper<String> STRING_MAPPER = (rs, row) -> rs.getString(1);
     private static final RowMapper<Integer> INT_MAPPER = (rs, row) -> rs.getInt(1);
+    private static final RowMapper<LayerDto> LAYER_MAPPER = (rs, row) -> new LayerDto(
+            rs.getInt("layer_order"), rs.getString("party_id"),
+            rs.getString("party_type"), rs.getString("key_fingerprint"));
+    private static final RowMapper<BlobRelay> BLOB_RELAY_MAPPER = (rs, row) ->
+            new BlobRelay(rs.getString("salt_hex"), rs.getString("encrypted_blob_b64"));
 
     private final DbClient dbClient;
     private final JwtService jwtService;
@@ -119,11 +132,29 @@ public class GetSessionStatusHandler {
             }
         }
 
+        // B-A6-1.2: relay fields. The NEXT peeler decrypts currentEncryptedB64 using saltHex.
+        //   layersPeeled == 0  → the recovery blob envelope (encrypted_blob_b64)
+        //   layersPeeled  > 0  → the most recent peel's relayed intermediate ciphertext
+        //   completed          → null (the final peeler holds the recovered key on-device)
+        BlobRelay blob = dbClient.queryOne(SELECT_BLOB_RELAY, BLOB_RELAY_MAPPER, session.blobId())
+                .orElse(new BlobRelay(null, null));
+        String currentEncryptedB64 = null;
+        if (!"completed".equals(session.status())) {
+            if (layersPeeled == 0) {
+                currentEncryptedB64 = blob.encryptedBlobB64();
+            } else {
+                currentEncryptedB64 = dbClient.queryOne(
+                        SELECT_LATEST_INTERMEDIATE, STRING_MAPPER, sessionId).orElse(null);
+            }
+        }
+        List<LayerDto> layers = dbClient.query(SELECT_LAYERS, LAYER_MAPPER, session.blobId());
+
         String requestId = UUID.randomUUID().toString();
         return ResponseEntity.ok(ApiResponse.ok(new SessionStatusResponse(
                 session.sessionId(), session.status(), session.creatorId(),
                 session.lockedUntil(), timelockActive, totalLayers, layersPeeled,
-                nextLayerOrder, nextPartyId, nextPartyType, session.completedAt()), requestId));
+                nextLayerOrder, nextPartyId, nextPartyType, session.completedAt(),
+                session.blobId(), currentEncryptedB64, blob.saltHex(), layers), requestId));
     }
 
     private record SessionStatusResponse(
@@ -137,6 +168,14 @@ public class GetSessionStatusHandler {
             Integer nextLayerOrder,
             String nextPartyId,
             String nextPartyType,
-            Instant completedAt
+            Instant completedAt,
+            String blobId,
+            String currentEncryptedB64,
+            String saltHex,
+            List<LayerDto> layers
     ) {}
+
+    private record LayerDto(int layerOrder, String partyId, String partyType, String keyFingerprint) {}
+
+    private record BlobRelay(String saltHex, String encryptedBlobB64) {}
 }

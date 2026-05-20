@@ -1,5 +1,7 @@
 package in.deathtrap.recovery.routes.blob;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import in.deathtrap.common.audit.AuditWritePayload;
 import in.deathtrap.common.audit.AuditWriter;
 import in.deathtrap.common.crypto.CsprngUtil;
@@ -81,13 +83,16 @@ public class StoreBlobHandler {
             "WHERE creator_id = ? AND status = 'active'";
     private static final String INSERT_BLOB =
             "INSERT INTO recovery_blobs (blob_id, creator_id, s3_key, layer_count, status, " +
-            "spec_version, built_at, created_at) VALUES (?, ?, ?, ?, 'active', ?, NOW(), NOW())";
+            "spec_version, salt_hex, encrypted_blob_b64, built_at, created_at) " +
+            "VALUES (?, ?, ?, ?, 'active', ?, ?, ?, NOW(), NOW())";
     private static final String INSERT_LAYER =
             "INSERT INTO recovery_blob_layers (layer_id, blob_id, layer_order, party_id, " +
             "party_type, pubkey_id, key_fingerprint, spec_version, created_at) " +
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())";
     private static final String UPDATE_LOCKER_BLOB_BUILT =
             "UPDATE locker_meta SET blob_built = TRUE, updated_at = NOW() WHERE user_id = ?";
+
+    private static final ObjectMapper ENVELOPE_MAPPER = new ObjectMapper();
 
     private static final RowMapper<Integer> ONE_MAPPER = (rs, row) -> 1;
     private static final RowMapper<PubkeyRow> PUBKEY_MAPPER = (rs, row) ->
@@ -193,6 +198,12 @@ public class StoreBlobHandler {
         String s3Key = "recovery/" + creatorId + "/" + blobId;
         putToS3OrDev(blobId, s3Key, request.encryptedBlobB64());
 
+        // Extract the PUBLIC envelope salt (recovery_envelope.saltHex, docs §4.1) so the
+        // peel relay can hand it to peelers 2..N, who never receive the envelope. This is
+        // the only field read from the otherwise-opaque envelope; saltHex is a non-secret
+        // HKDF salt, never key material. If parsing fails we store null and peelers fall back.
+        String saltHex = extractEnvelopeSaltHex(request.encryptedBlobB64());
+
         int blobCount = dbClient.queryOne(SELECT_CREATOR_BLOB_COUNT, INT_MAPPER, creatorId).orElse(0);
         int newVersion = blobCount + 1;
 
@@ -204,7 +215,8 @@ public class StoreBlobHandler {
                         .actorId(creatorId).actorType(PartyType.CREATOR).targetId(oldBlobId)
                         .build());
             }
-            dbClient.execute(INSERT_BLOB, blobId, creatorId, s3Key, layers.size(), request.specVersion());
+            dbClient.execute(INSERT_BLOB, blobId, creatorId, s3Key, layers.size(),
+                    request.specVersion(), saltHex, request.encryptedBlobB64());
             for (int i = 0; i < layers.size(); i++) {
                 BlobLayerRequest layer = layers.get(i);
                 String layerId = CsprngUtil.randomUlid();
@@ -239,6 +251,20 @@ public class StoreBlobHandler {
         String requestId = UUID.randomUUID().toString();
         return ResponseEntity.status(201).body(ApiResponse.ok(
                 new StoreBlobResponse(blobId, newVersion, uploadedAt), requestId));
+    }
+
+    /** Reads the public top-level {@code saltHex} from the v1 envelope (base64 of JSON).
+     *  Returns null if the envelope can't be parsed; never throws. */
+    private static String extractEnvelopeSaltHex(String encryptedBlobB64) {
+        try {
+            byte[] envelopeJson = Base64.getDecoder().decode(encryptedBlobB64);
+            JsonNode root = ENVELOPE_MAPPER.readTree(envelopeJson);
+            JsonNode salt = root.get("saltHex");
+            return (salt != null && salt.isTextual()) ? salt.asText() : null;
+        } catch (Exception ex) {
+            log.warn("Could not extract envelope saltHex; storing null (peelers fall back)");
+            return null;
+        }
     }
 
     private void validateLayerOrdering(List<BlobLayerRequest> layers) {
