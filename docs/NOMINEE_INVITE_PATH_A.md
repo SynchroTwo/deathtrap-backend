@@ -152,7 +152,12 @@ payload for audit.
 Status: **live on staging.** `V012` applied; auth-service redeployed; smoke-verified
 (`GET /auth/creator/{unknown}/pubkey` → 404 envelope, `POST /auth/nominee/accept` junk → 400).
 
-- **CORS:** new endpoints inherit the existing `/auth/*` allowlist (B8) — no CORS change.
+- **CORS:** there was originally **no** CORS handling anywhere (the earlier "B8 allowlist"
+  note was incorrect). API Gateway proxies `ANY` (incl. `OPTIONS`) to the Lambda, so CORS is
+  handled in Spring via a highest-precedence `CorsFilter` (`auth.config.CorsConfig`). Allowed
+  origins come from `CORS_ALLOWED_ORIGINS` (comma-separated, supports patterns); unset = any
+  `localhost`/`127.0.0.1` port (non-prod). **Other HTTP services (locker/recovery/trigger/audit)
+  still lack this filter — they need the same fix before the UI calls them cross-origin.**
 - **Migration:** `V012` applied. Re-runnable via `scripts/migrate_staging.sh` (must run from a
   VPC-attached CloudShell — Lambda subnet + Lambda SG — since the RDS is private-isolated).
 - **Invite-token contract:** cross-impl verified byte-exact against the UI vector
