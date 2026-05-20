@@ -27,7 +27,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.when;
 
 /** Unit tests for LoginHandler — no Spring context.
@@ -64,7 +63,7 @@ class LoginHandlerTest {
 
     @Test
     void validLogin_returnsTokensAndCryptoMaterial() {
-        doNothing().when(jwtService).validateVerifiedToken(anyString());
+        when(jwtService.validateVerifiedToken(anyString())).thenReturn("+919876543210");
         // 4 sequential queryOne calls: OTP, user, salt, privkey blob
         when(dbClient.queryOne(anyString(), any(), anyString()))
                 .thenReturn(Optional.of("otp-id-1"))
@@ -99,7 +98,7 @@ class LoginHandlerTest {
 
     @Test
     void noVerifiedLoginOtp_throwsUnauthorized() {
-        doNothing().when(jwtService).validateVerifiedToken(anyString());
+        when(jwtService.validateVerifiedToken(anyString())).thenReturn("+919876543210");
         when(dbClient.queryOne(anyString(), any(), anyString())).thenReturn(Optional.empty());
 
         AppException ex = assertThrows(AppException.class,
@@ -110,7 +109,7 @@ class LoginHandlerTest {
 
     @Test
     void mobileNotFound_throwsNotFound() {
-        doNothing().when(jwtService).validateVerifiedToken(anyString());
+        when(jwtService.validateVerifiedToken(anyString())).thenReturn("+919876543210");
         when(dbClient.queryOne(anyString(), any(), anyString()))
                 .thenReturn(Optional.of("otp-id-1"))
                 .thenReturn(Optional.empty());
@@ -128,7 +127,7 @@ class LoginHandlerTest {
                 KycStatus.VERIFIED, UserStatus.SUSPENDED,
                 null, null, 0, null, 12,
                 Instant.now(), Instant.now(), null);
-        doNothing().when(jwtService).validateVerifiedToken(anyString());
+        when(jwtService.validateVerifiedToken(anyString())).thenReturn("+919876543210");
         when(dbClient.queryOne(anyString(), any(), anyString()))
                 .thenReturn(Optional.of("otp-id-1"))
                 .thenReturn(Optional.of(suspended));

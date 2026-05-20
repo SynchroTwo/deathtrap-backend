@@ -104,6 +104,16 @@ public class AppException extends RuntimeException {
         return new AppException(ErrorCode.AUTH_INVITE_EXPIRED);
     }
 
+    /** Returns an exception for an unknown nominee referenced by an invite or path id. */
+    public static AppException nomineeNotFound() {
+        return new AppException(ErrorCode.NOMINEE_NOT_FOUND);
+    }
+
+    /** Returns an exception when a nominee has already accepted their invite. */
+    public static AppException nomineeAlreadyRegistered() {
+        return new AppException(ErrorCode.NOMINEE_ALREADY_REGISTERED);
+    }
+
     /** Returns an exception indicating a compromised passphrase. */
     public static AppException passphraseCompromised() {
         return new AppException(ErrorCode.AUTH_PASSPHRASE_COMPROMISED);

@@ -18,6 +18,8 @@ public enum ErrorCode {
     AUTH_REGISTRATION_DUPLICATE(409, "Account already exists"),
     AUTH_INVITE_INVALID(400, "Invite token is invalid"),
     AUTH_INVITE_EXPIRED(410, "Invite has expired"),
+    NOMINEE_NOT_FOUND(404, "Nominee not found"),
+    NOMINEE_ALREADY_REGISTERED(409, "Nominee has already accepted this invite"),
     AUTH_PASSPHRASE_COMPROMISED(422, "This passphrase has appeared in known data breaches"),
 
     // Validation
