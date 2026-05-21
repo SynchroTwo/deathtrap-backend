@@ -32,7 +32,8 @@ public class ThresholdService {
             "VALUES (?, ?, 'pending_threshold', FALSE, NOW(), NOW())";
     private static final String INSERT_SOURCE =
             "INSERT INTO trigger_sources (source_id, trigger_id, source_type, reference_id, " +
-            "verified, received_at, created_at) VALUES (?, ?, ?, ?, TRUE, NOW(), NOW())";
+            "verified, received_at, created_at) " +
+            "VALUES (?, ?, ?::trigger_source_type_enum, ?, TRUE, NOW(), NOW())";
     private static final String SELECT_VERIFIED_COUNT =
             "SELECT COUNT(*) FROM trigger_sources WHERE trigger_id = ? AND verified = TRUE";
     // B-A6-2 (option 3.A): auto-promote straight to 'approved' at 2-of-3 so
