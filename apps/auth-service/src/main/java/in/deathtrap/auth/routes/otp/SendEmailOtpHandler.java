@@ -87,6 +87,10 @@ public class SendEmailOtpHandler {
         String otpId = CsprngUtil.randomUlid();
         Instant expiresAt = now.plusSeconds(OTP_EXPIRY_SECONDS);
         dbClient.execute(INSERT_OTP, otpId, partyId, purpose, otpHash, expiresAt, now);
-        log.info("[DEV-OTP] EMAIL OTP for party={}: {}", partyId, otp);
+        // Never log plaintext OTPs in prod (PI-11); kept in local/staging for retrieval.
+        String env = System.getenv().getOrDefault("ENVIRONMENT", "local");
+        if ("local".equals(env) || "staging".equals(env)) {
+            log.info("[DEV-OTP] EMAIL OTP for party={}: {}", partyId, otp);
+        }
     }
 }
