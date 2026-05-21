@@ -75,6 +75,28 @@ public class AuditQueryService {
         return new AuditQueryResult(total, entries);
     }
 
+    /**
+     * Owner-scoped query: audit_log entries where the party is the actor OR the target.
+     * Never returns other parties' entries. size is capped at 200. Returns total count
+     * and a page of entries ordered newest-first.
+     */
+    public AuditQueryResult queryForParty(String partyId, int page, int size) {
+        int effectiveSize = Math.min(size, 200);
+        String whereClause = " WHERE (actor_id = ? OR target_id = ?)";
+
+        long total = db.queryOne(
+                "SELECT COUNT(*) FROM audit_log" + whereClause,
+                (rs, r) -> rs.getLong(1),
+                partyId, partyId).orElse(0L);
+
+        List<AuditLogRow> entries = db.query(
+                "SELECT * FROM audit_log" + whereClause + " ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                AuditLogRowMapper.INSTANCE,
+                partyId, partyId, effectiveSize, (long) page * effectiveSize);
+
+        return new AuditQueryResult(total, entries);
+    }
+
     /** Paginated result from an audit log query. */
     public record AuditQueryResult(long total, List<AuditLogRow> entries) {}
 }
