@@ -1,10 +1,12 @@
 package in.deathtrap.auth.config;
 
+import in.deathtrap.common.db.DbClient;
 import in.deathtrap.common.errors.AppException;
 import in.deathtrap.common.errors.ErrorCode;
 import in.deathtrap.common.types.dto.JwtPayload;
 import in.deathtrap.common.types.enums.OtpPurpose;
 import in.deathtrap.common.types.enums.PartyType;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -12,6 +14,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /** Unit tests for JwtService — no Spring context, no mocks. */
 class JwtServiceTest {
@@ -126,5 +132,30 @@ class JwtServiceTest {
     @Test
     void getAccessTokenSeconds_returnsPositiveValue() {
         assertTrue(jwtService.getAccessTokenSeconds() > 0);
+    }
+
+    @Test
+    void validateToken_revokedJti_throwsSessionRevoked() {
+        DbClient db = mock(DbClient.class);
+        when(db.queryOne(anyString(), any(), any())).thenReturn(Optional.of(Boolean.TRUE));
+        JwtService svc = new JwtService(SECRET, db);
+        String token = svc.issueToken("user-1", PartyType.CREATOR, "session-1");
+
+        AppException ex = assertThrows(AppException.class, () -> svc.validateToken(token));
+
+        assertEquals(ErrorCode.AUTH_SESSION_REVOKED, ex.getErrorCode());
+    }
+
+    @Test
+    void validateToken_notRevoked_returnsPayload() {
+        DbClient db = mock(DbClient.class);
+        when(db.queryOne(anyString(), any(), any())).thenReturn(Optional.empty());
+        JwtService svc = new JwtService(SECRET, db);
+        String token = svc.issueToken("user-1", PartyType.CREATOR, "session-1");
+
+        JwtPayload payload = svc.validateToken(token);
+
+        assertEquals("user-1", payload.sub());
+        assertEquals("session-1", payload.jti());
     }
 }

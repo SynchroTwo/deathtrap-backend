@@ -1,5 +1,6 @@
 package in.deathtrap.recovery.config;
 
+import in.deathtrap.common.db.DbClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
@@ -19,7 +20,7 @@ public class RecoveryConfig {
     /** Creates the JwtService bean. Reads JWT_SECRET_ARN from Secrets Manager when
      *  set (Lambda/AWS), otherwise falls back to JWT_SECRET env var (local dev). */
     @Bean
-    public JwtService jwtService() {
+    public JwtService jwtService(DbClient dbClient) {
         String secret;
         String jwtSecretArn = System.getenv("JWT_SECRET_ARN");
         if (jwtSecretArn != null && !jwtSecretArn.isBlank()) {
@@ -41,7 +42,7 @@ public class RecoveryConfig {
                 throw new IllegalStateException("JWT_SECRET_ARN or JWT_SECRET environment variable is required");
             }
         }
-        return new JwtService(secret);
+        return new JwtService(secret, dbClient);
     }
 
     /** Creates the TransactionTemplate bean used by DbClient. */

@@ -1,5 +1,6 @@
 package in.deathtrap.trigger.config;
 
+import in.deathtrap.common.db.DbClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
@@ -19,8 +20,8 @@ public class TriggerConfig {
     /** Creates the JwtService bean. Reads JWT_SECRET_ARN from Secrets Manager when
      *  set (Lambda/AWS), otherwise falls back to JWT_SECRET env var (local dev). */
     @Bean
-    public JwtService jwtService() {
-        return new JwtService(loadSecret("JWT_SECRET_ARN", "JWT_SECRET"));
+    public JwtService jwtService(DbClient dbClient) {
+        return new JwtService(loadSecret("JWT_SECRET_ARN", "JWT_SECRET"), dbClient);
     }
 
     /** Loads WEBHOOK_SECRET from Secrets Manager (via WEBHOOK_SECRET_ARN) or env var. */

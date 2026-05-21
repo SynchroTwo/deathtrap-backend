@@ -1,5 +1,6 @@
 package in.deathtrap.auth.config;
 
+import in.deathtrap.common.db.DbClient;
 import in.deathtrap.common.errors.AppException;
 import in.deathtrap.common.types.dto.JwtPayload;
 import in.deathtrap.common.types.enums.OtpPurpose;
@@ -29,12 +30,19 @@ public class JwtService {
     private final SecretKey signingKey;
     private final long accessTokenSeconds;
     private final long refreshTokenSeconds;
+    private final DbClient db;
 
-    /** Constructs JwtService using the provided secret string as the HMAC key. */
+    /** Constructs JwtService without revocation checking (tests/local only). */
     public JwtService(String jwtSecret) {
+        this(jwtSecret, null);
+    }
+
+    /** Constructs JwtService; when db is non-null, validateToken rejects revoked jti. */
+    public JwtService(String jwtSecret, DbClient db) {
         this.signingKey = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
         this.accessTokenSeconds = parseLongEnv("ACCESS_TOKEN_MINUTES", 15L) * 60;
         this.refreshTokenSeconds = parseLongEnv("REFRESH_TOKEN_DAYS", 7L) * 86400;
+        this.db = db;
     }
 
     /** Issues a signed access JWT (15 min default). Used for all API calls. */
@@ -109,6 +117,7 @@ public class JwtService {
      * Throws AppException if the token is expired or malformed.
      */
     public JwtPayload validateToken(String token) {
+        final JwtPayload payload;
         try {
             Claims claims = Jwts.parser()
                     .verifyWith(signingKey)
@@ -117,7 +126,7 @@ public class JwtService {
                     .getPayload();
             String partyTypeStr = claims.get(CLAIM_PARTY_TYPE, String.class);
             PartyType partyType = PartyType.valueOf(partyTypeStr);
-            return new JwtPayload(
+            payload = new JwtPayload(
                     claims.getSubject(),
                     partyType,
                     claims.getId(),
@@ -129,6 +138,21 @@ public class JwtService {
         } catch (JwtException | IllegalArgumentException ex) {
             log.warn("JWT invalid");
             throw AppException.sessionInvalid();
+        }
+        assertNotRevoked(payload.jti());
+        return payload;
+    }
+
+    /** Rejects the token when its jti has been revoked (logout / passphrase change). */
+    private void assertNotRevoked(String jti) {
+        if (db == null || jti == null) {
+            return;
+        }
+        boolean revoked = db.queryOne("SELECT 1 FROM revoked_tokens WHERE jti = ?",
+                (rs, rowNum) -> Boolean.TRUE, jti).isPresent();
+        if (revoked) {
+            log.warn("JWT revoked (jti present in revoked_tokens)");
+            throw AppException.sessionRevoked();
         }
     }
 
