@@ -27,13 +27,13 @@ check "POST /trigger/checkin no auth" 401 $(curl -sf -o /dev/null -w "%{http_cod
 check "GET /audit/log no auth"        401 $(curl -sf -o /dev/null -w "%{http_code}" $BASE/audit/log)
 
 echo "-- OTP send (log mode) --"
-R=$(curl -sf -o /dev/null -w "%{http_code}" -X POST $BASE/auth/otp/send \
+R=$(curl -sf -o /dev/null -w "%{http_code}" -X POST $BASE/auth/otp/send-mobile \
   -H "Content-Type: application/json" \
   -d '{"mobile":"+919999999990","purpose":"registration"}')
-check "POST /auth/otp/send" "200" "$R"
+check "POST /auth/otp/send-mobile" "200" "$R"
 
 echo "-- Security headers --"
-H=$(curl -sI -X POST $BASE/auth/otp/send -H "Content-Type: application/json" -d '{}')
+H=$(curl -s -D - -o /dev/null -X POST $BASE/auth/otp/send-mobile -H "Content-Type: application/json" -d '{}')
 echo "$H" | grep -qi "X-Frame-Options" \
   && { echo "  ✓ X-Frame-Options"; PASS=$((PASS+1)); } \
   || { echo "  ✗ X-Frame-Options MISSING"; FAIL=$((FAIL+1)); }
