@@ -72,7 +72,7 @@ class DownloadBlobHandlerTest {
         when(dbClient.query(anyString(), any(), any(), any()))   // 2-vararg: SELECT_BLOB
                 .thenReturn(List.of(activeBlobVersion()));
 
-        ResponseEntity<?> response = handler.downloadBlob("bank_accounts", BEARER);
+        ResponseEntity<?> response = handler.downloadBlob("bank_accounts", null, BEARER);
 
         assertEquals(200, response.getStatusCode().value());
     }
@@ -80,17 +80,26 @@ class DownloadBlobHandlerTest {
     @Test
     void nomineeDownloadsCreatorBlob_resolvesLockerReturnsUrl() {
         when(jwtService.validateToken(anyString())).thenReturn(nomineeJwt());
-        // Nominee resolveLockerId now checks FV wrap first (empty here), then
-        // falls through to the existing E006-style nominee link.
-        when(dbClient.query(anyString(), any(), any()))            // 1-vararg: locker resolution
+        // Nominee now passes creatorId. FV wrap path empty → E006 fallback finds the
+        // nominee link for that specific creator.
+        when(dbClient.query(anyString(), any(), any(), any()))     // 2-vararg: 1st = FV (empty), 2nd = E006 fallback (string list), 3rd = SELECT_BLOB
                 .thenReturn(List.of())                              // FV path: no wrap
-                .thenReturn(List.of("locker-1"));                   // E006 fallback: locker found
-        when(dbClient.query(anyString(), any(), any(), any()))     // 2-vararg: SELECT_BLOB
-                .thenReturn(List.of(activeBlobVersion()));
+                .thenReturn(List.of("locker-1"))                    // E006 fallback: locker found
+                .thenReturn(List.of(activeBlobVersion()));          // SELECT_BLOB
 
-        ResponseEntity<?> response = handler.downloadBlob("bank_accounts", BEARER);
+        ResponseEntity<?> response = handler.downloadBlob("bank_accounts", "creator-1", BEARER);
 
         assertEquals(200, response.getStatusCode().value());
+    }
+
+    @Test
+    void nomineeWithoutCreatorId_throwsValidationFailed() {
+        when(jwtService.validateToken(anyString())).thenReturn(nomineeJwt());
+
+        AppException ex = assertThrows(AppException.class,
+                () -> handler.downloadBlob("bank_accounts", null, BEARER));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
     }
 
     @Test
@@ -102,7 +111,7 @@ class DownloadBlobHandlerTest {
                 .thenReturn(List.of());
 
         AppException ex = assertThrows(AppException.class,
-                () -> handler.downloadBlob("bank_accounts", BEARER));
+                () -> handler.downloadBlob("bank_accounts", null, BEARER));
 
         assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
     }
@@ -112,7 +121,7 @@ class DownloadBlobHandlerTest {
         when(jwtService.validateToken(anyString())).thenReturn(adminJwt());
 
         AppException ex = assertThrows(AppException.class,
-                () -> handler.downloadBlob("bank_accounts", BEARER));
+                () -> handler.downloadBlob("bank_accounts", null, BEARER));
 
         assertEquals(ErrorCode.AUTH_FORBIDDEN, ex.getErrorCode());
     }

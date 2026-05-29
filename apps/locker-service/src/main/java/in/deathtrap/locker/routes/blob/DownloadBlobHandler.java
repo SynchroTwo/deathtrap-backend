@@ -27,6 +27,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
@@ -51,14 +52,19 @@ public class DownloadBlobHandler {
             "JOIN recovery_blobs rb ON rbl.blob_id = rb.blob_id " +
             "WHERE rb.creator_id = lm.user_id AND rbl.party_type = 'lawyer'::party_type_enum " +
             "AND rb.status = 'active'::recovery_blob_status_enum LIMIT 1";
-    // E011 Path Y: nominee fetches via an active family_vault_wraps row.
+    // E011 Path Y: nominee fetches via an active family_vault_wraps row for the named creator.
     private static final String SELECT_LOCKER_FOR_FAMILY_VAULT =
             "SELECT lm.locker_id, fvw.wrap_id FROM family_vault_wraps fvw " +
             "JOIN locker_meta lm ON lm.user_id = fvw.creator_id " +
-            "WHERE fvw.nominee_party_id = ? AND fvw.status = 'active' " +
-            "ORDER BY fvw.created_at DESC LIMIT 1";
+            "WHERE fvw.nominee_party_id = ? AND fvw.creator_id = ? AND fvw.status = 'active' LIMIT 1";
+    // E006 fallback for nominees — restricted to the named creator (no more LIMIT 1 fuzziness).
+    private static final String SELECT_LOCKER_FOR_NOMINEE_BY_CREATOR =
+            "SELECT lm.locker_id FROM locker_meta lm " +
+            "JOIN nominees n ON n.creator_id = lm.user_id " +
+            "WHERE n.nominee_id = ? AND lm.user_id = ? " +
+            "AND n.status = 'active'::nominee_status_enum LIMIT 1";
     private static final String SELECT_REVOKED_WRAP_EXISTS =
-            "SELECT 1 FROM family_vault_wraps WHERE nominee_party_id = ? AND status = 'revoked' LIMIT 1";
+            "SELECT 1 FROM family_vault_wraps WHERE nominee_party_id = ? AND creator_id = ? AND status = 'revoked' LIMIT 1";
     private static final String SELECT_BLOB =
             "SELECT bv.blob_id, bv.asset_id, bv.locker_id, bv.s3_key, bv.size_bytes, " +
             "bv.content_hash_sha256, bv.schema_version, bv.version, bv.is_current, bv.created_at, bv.updated_at " +
@@ -88,10 +94,14 @@ public class DownloadBlobHandler {
         this.s3Presigner = s3Presigner;
     }
 
-    /** GET /locker/blob/{categoryCode} — resolves locker, generates presigned S3 URL. */
+    /** GET /locker/blob/{categoryCode} — resolves locker, generates presigned S3 URL.
+     *  Nominee callers must pass ?creatorId=&lt;id&gt; identifying which shared
+     *  locker to access (E011 Path Y multi-creator disambiguation). Creators
+     *  and lawyers don't need the param. */
     @GetMapping("/{categoryCode}")
     public ResponseEntity<ApiResponse<DownloadBlobResponse>> downloadBlob(
             @PathVariable String categoryCode,
+            @RequestParam(value = "creatorId", required = false) String creatorIdParam,
             @RequestHeader("Authorization") String authHeader) {
 
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
@@ -101,7 +111,7 @@ public class DownloadBlobHandler {
         String partyId = jwt.sub();
         PartyType partyType = jwt.partyType();
 
-        LockerResolution resolution = resolveLockerId(partyId, partyType);
+        LockerResolution resolution = resolveLockerId(partyId, partyType, creatorIdParam);
         String lockerId = resolution.lockerId();
 
         List<BlobVersion> blobRows = dbClient.query(SELECT_BLOB, BlobVersionRowMapper.INSTANCE, lockerId, categoryCode);
@@ -138,25 +148,31 @@ public class DownloadBlobHandler {
                 requestId));
     }
 
-    private LockerResolution resolveLockerId(String partyId, PartyType partyType) {
+    private LockerResolution resolveLockerId(String partyId, PartyType partyType, String creatorIdParam) {
         if (partyType == PartyType.CREATOR) {
             List<String> rows = dbClient.query(SELECT_LOCKER_FOR_CREATOR, STRING_MAPPER, partyId);
             if (rows.isEmpty()) throw AppException.forbidden();
             return new LockerResolution(rows.get(0), null);
         }
         if (partyType == PartyType.NOMINEE) {
-            // E011 Path Y: prefer Family Vault wrap if active.
-            List<FvLockerRow> fvRows = dbClient.query(SELECT_LOCKER_FOR_FAMILY_VAULT, FV_LOCKER_MAPPER, partyId);
+            if (creatorIdParam == null || creatorIdParam.isBlank()) {
+                throw AppException.validationFailed(Map.of(
+                        "field", "creatorId",
+                        "message", "Nominee callers must specify ?creatorId=<id> identifying which shared locker to access"));
+            }
+            // E011 Path Y: prefer Family Vault wrap if active for (this nominee, this creator).
+            List<FvLockerRow> fvRows = dbClient.query(SELECT_LOCKER_FOR_FAMILY_VAULT,
+                    FV_LOCKER_MAPPER, partyId, creatorIdParam);
             if (!fvRows.isEmpty()) {
                 return new LockerResolution(fvRows.get(0).lockerId(), fvRows.get(0).wrapId());
             }
-            // Else fall back to existing E006-style nominee resolution.
-            List<String> rows = dbClient.query(SELECT_LOCKER_FOR_NOMINEE, STRING_MAPPER, partyId);
+            // E006 fallback for nominees — link to the named creator only.
+            List<String> rows = dbClient.query(SELECT_LOCKER_FOR_NOMINEE_BY_CREATOR,
+                    STRING_MAPPER, partyId, creatorIdParam);
             if (!rows.isEmpty()) return new LockerResolution(rows.get(0), null);
-            // No access path resolved — if the nominee USED to have a wrap, emit
-            // the distinctive code so the FE can show a "your access was revoked"
-            // landing instead of generic forbidden.
-            if (dbClient.queryOne(SELECT_REVOKED_WRAP_EXISTS, ONE_MAPPER, partyId).isPresent()) {
+            // No access path — if the nominee USED to have a wrap for this creator,
+            // emit the distinctive code so the FE can show "your access was revoked".
+            if (dbClient.queryOne(SELECT_REVOKED_WRAP_EXISTS, ONE_MAPPER, partyId, creatorIdParam).isPresent()) {
                 throw new AppException(ErrorCode.FAMILY_VAULT_WRAP_REVOKED,
                         "Your Family Vault access has been revoked");
             }
