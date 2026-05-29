@@ -120,10 +120,8 @@ public class UploadDeathCertHandler {
 
         // 1. Mime check
         if (!ALLOWED_MIMES.contains(request.mimeType())) {
-            throw AppException.validationFailed(Map.of(
-                    "field", "mimeType",
-                    "allowed", ALLOWED_MIMES,
-                    "got", request.mimeType()));
+            throw new AppException(ErrorCode.RECOVERY_INVALID_MIME,
+                    "Got " + request.mimeType() + "; allowed: " + ALLOWED_MIMES);
         }
 
         // 2. Authorization — model-dependent.
@@ -132,13 +130,13 @@ public class UploadDeathCertHandler {
         if ("sequential".equals(shape)) {
             // Model A: caller must be a trustee.
             if (dbClient.queryOne(SELECT_NOMINEE_TRUSTEE, ONE_MAPPER, uploaderId, creatorId).isEmpty()) {
-                throw new AppException(ErrorCode.AUTH_FORBIDDEN,
+                throw new AppException(ErrorCode.RECOVERY_FORBIDDEN_RELATION,
                         "Only trustees can upload a death cert for a Model A locker");
             }
         } else {
             // Model B (parallel) or any other shape: any active nominee linked to creator.
             if (dbClient.queryOne(SELECT_NOMINEE_OWNED, ONE_MAPPER, uploaderId, creatorId).isEmpty()) {
-                throw new AppException(ErrorCode.AUTH_FORBIDDEN,
+                throw new AppException(ErrorCode.RECOVERY_FORBIDDEN_RELATION,
                         "Caller is not an active nominee for this creator");
             }
         }
@@ -229,8 +227,8 @@ public class UploadDeathCertHandler {
             case "confirmed" -> new WindowDispatchPlan("logged_phase5", null);
             case "objected", "lawyer_silent", "expired" -> {
                 if (existing.cooloffUntil != null && existing.cooloffUntil.isAfter(now)) {
-                    throw new AppException(ErrorCode.CONFLICT,
-                            "Recovery is in cooloff until " + existing.cooloffUntil);
+                    throw new AppException(ErrorCode.RECOVERY_COOLOFF_ACTIVE,
+                            "Cooloff active until " + existing.cooloffUntil);
                 }
                 int nextCycle = dbClient.queryOne(SELECT_LATEST_CYCLE, INT_MAPPER, creatorId).orElse(0) + 1;
                 yield new WindowDispatchPlan("new_cycle",
@@ -252,10 +250,8 @@ public class UploadDeathCertHandler {
 
     private byte[] decodeAndValidateCert(UploadDeathCertRequest request) {
         if (request.sizeBytes() > MAX_BYTES) {
-            throw AppException.validationFailed(Map.of(
-                    "field", "sizeBytes",
-                    "max", MAX_BYTES,
-                    "got", request.sizeBytes()));
+            throw new AppException(ErrorCode.RECOVERY_FILE_TOO_LARGE,
+                    "Size " + request.sizeBytes() + " bytes exceeds the " + MAX_BYTES + " byte limit");
         }
         byte[] bytes;
         try {

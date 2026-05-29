@@ -190,7 +190,8 @@ public class ConfirmationWindowActionHandler {
 
     private ActionLinkClaims parseAuth(String authHeader, String windowId) {
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            throw AppException.unauthorized();
+            throw new AppException(ErrorCode.RECOVERY_TOKEN_MISSING,
+                    "Action-link token required in Authorization: Bearer header");
         }
         return tokenService.verify(authHeader.substring(7), windowId);
     }
@@ -201,15 +202,23 @@ public class ConfirmationWindowActionHandler {
     }
 
     private void assertPending(WindowRow window) {
-        if (!"pending".equals(window.status)) {
-            throw new AppException(ErrorCode.CONFLICT,
-                    "Window is not in pending state (current=" + window.status + ")");
+        if ("pending".equals(window.status)) {
+            return;
+        }
+        switch (window.status) {
+            case "objected" -> throw new AppException(ErrorCode.RECOVERY_WINDOW_OBJECTED,
+                    "Window was objected at " + window.cooloffUntil);
+            case "confirmed" -> throw new AppException(ErrorCode.RECOVERY_WINDOW_CONFIRMED,
+                    "Window has already been confirmed");
+            default -> throw new AppException(ErrorCode.CONFLICT,
+                    "Window is in terminal state: " + window.status);
         }
     }
 
     private void assertNotAlreadyResponded(String windowId, String partyId) {
         if (dbClient.queryOne(SELECT_EXISTING_RESPONSE, ONE_MAPPER, windowId, partyId).isPresent()) {
-            throw new AppException(ErrorCode.CONFLICT, "Party has already responded to this window");
+            throw new AppException(ErrorCode.RECOVERY_TOKEN_ALREADY_USED,
+                    "Party has already responded to this window");
         }
     }
 

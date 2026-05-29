@@ -44,6 +44,16 @@ public enum ErrorCode {
     // Trigger
     TRIGGER_INSUFFICIENT_SOURCES(400, "Insufficient signal sources for trigger"),
 
+    // E006 — death-cert + confirmation flow
+    RECOVERY_COOLOFF_ACTIVE(409, "Recovery confirmation cycle is in cooloff"),
+    RECOVERY_FORBIDDEN_RELATION(403, "Caller is not authorised to act for this creator"),
+    RECOVERY_INVALID_MIME(400, "Death certificate mime type not allowed"),
+    RECOVERY_FILE_TOO_LARGE(413, "Death certificate exceeds the size limit"),
+    RECOVERY_TOKEN_MISSING(401, "Action-link token missing"),
+    RECOVERY_TOKEN_ALREADY_USED(409, "Action-link token has already been used"),
+    RECOVERY_WINDOW_OBJECTED(409, "Confirmation window has already been objected"),
+    RECOVERY_WINDOW_CONFIRMED(409, "Confirmation window has already been confirmed"),
+
     // Server
     INTERNAL_ERROR(500, "An unexpected error occurred"),
     EXTERNAL_SERVICE_ERROR(502, "External service unavailable"),
