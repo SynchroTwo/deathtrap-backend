@@ -45,7 +45,7 @@ public class UploadDeathCertHandler {
 
     private static final Logger log = LoggerFactory.getLogger(UploadDeathCertHandler.class);
 
-    private static final long MAX_BYTES = 10L * 1024L * 1024L; // 10 MB hard cap per V018 CHECK
+    private static final long MAX_BYTES = 10L * 1024L * 1024L; // 10 MB hard cap per V021 CHECK
     private static final int DEFAULT_WINDOW_HOURS = 24;
     private static final int LAWYER_WINDOW_HOURS = 168;
     private static final List<String> ALLOWED_MIMES = List.of("image/jpeg", "image/png", "application/pdf");
