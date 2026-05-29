@@ -109,7 +109,7 @@ class StoreBlobHandlerTest {
                         layer(1, LAWYER_ID, "lawyer", LAWYER_FP),
                         layer(2, NOMINEE_ID_1, "nominee", NOMINEE_1_FP)
                 ),
-                "initial");
+                "initial", null);
     }
 
     /** Wires the standard mocks needed for a successful upload:
@@ -194,7 +194,7 @@ class StoreBlobHandlerTest {
         StoreBlobRequest bad = new StoreBlobRequest(
                 "v99", VALID_BLOB_ID, "dGVzdA==",
                 List.of(layer(1, LAWYER_ID, "lawyer", LAWYER_FP)),
-                "initial");
+                "initial", null);
 
         AppException ex = assertThrows(AppException.class, () -> handler.storeBlob(bad, BEARER));
         assertEquals(ErrorCode.RECOVERY_UNSUPPORTED_SPEC_VERSION, ex.getErrorCode());
@@ -207,7 +207,7 @@ class StoreBlobHandlerTest {
                 "v1", "not-a-uuid", "dGVzdA==",
                 List.of(layer(1, LAWYER_ID, "lawyer", LAWYER_FP),
                         layer(2, NOMINEE_ID_1, "nominee", NOMINEE_1_FP)),
-                "initial");
+                "initial", null);
 
         AppException ex = assertThrows(AppException.class, () -> handler.storeBlob(bad, BEARER));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
@@ -220,7 +220,7 @@ class StoreBlobHandlerTest {
                 "v1", VALID_BLOB_ID, "dGVzdA==",
                 List.of(layer(1, LAWYER_ID, "lawyer", LAWYER_FP),
                         layer(2, NOMINEE_ID_1, "nominee", NOMINEE_1_FP)),
-                "GARBAGE_REASON");
+                "GARBAGE_REASON", null);
 
         AppException ex = assertThrows(AppException.class, () -> handler.storeBlob(bad, BEARER));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
@@ -232,7 +232,7 @@ class StoreBlobHandlerTest {
         StoreBlobRequest bad = new StoreBlobRequest(
                 "v1", VALID_BLOB_ID, "dGVzdA==",
                 List.of(layer(1, LAWYER_ID, "lawyer", LAWYER_FP)),
-                "initial");
+                "initial", null);
 
         AppException ex = assertThrows(AppException.class, () -> handler.storeBlob(bad, BEARER));
         assertEquals(ErrorCode.RECOVERY_LAYER_COUNT_OUT_OF_BOUNDS, ex.getErrorCode());
@@ -251,7 +251,7 @@ class StoreBlobHandlerTest {
                 layer(7, "00000000-0000-4000-8000-000000000007", "nominee", "0".repeat(64)),
                 layer(8, "00000000-0000-4000-8000-000000000008", "nominee", "0".repeat(64))
         );
-        StoreBlobRequest bad = new StoreBlobRequest("v1", VALID_BLOB_ID, "dGVzdA==", tooMany, "initial");
+        StoreBlobRequest bad = new StoreBlobRequest("v1", VALID_BLOB_ID, "dGVzdA==", tooMany, "initial", null);
 
         AppException ex = assertThrows(AppException.class, () -> handler.storeBlob(bad, BEARER));
         assertEquals(ErrorCode.RECOVERY_LAYER_COUNT_OUT_OF_BOUNDS, ex.getErrorCode());
@@ -266,7 +266,7 @@ class StoreBlobHandlerTest {
                 "v1", VALID_BLOB_ID, "dGVzdA==",
                 List.of(layer(1, NOMINEE_ID_1, "nominee", NOMINEE_1_FP),
                         layer(2, LAWYER_ID, "lawyer", LAWYER_FP)),
-                "initial");
+                "initial", null);
 
         AppException ex = assertThrows(AppException.class, () -> handler.storeBlob(bad, BEARER));
         assertEquals(ErrorCode.RECOVERY_INVALID_RECIPIENT_ORDER, ex.getErrorCode());
@@ -282,7 +282,7 @@ class StoreBlobHandlerTest {
                 List.of(layer(1, LAWYER_ID, "lawyer", LAWYER_FP),
                         layer(2, NOMINEE_ID_1, "nominee", NOMINEE_1_FP),
                         layer(3, NOMINEE_ID_1, "nominee", NOMINEE_1_FP)),
-                "initial");
+                "initial", null);
 
         AppException ex = assertThrows(AppException.class, () -> handler.storeBlob(bad, BEARER));
         assertEquals(ErrorCode.RECOVERY_DUPLICATE_RECIPIENT, ex.getErrorCode());
@@ -297,7 +297,7 @@ class StoreBlobHandlerTest {
                 "v1", VALID_BLOB_ID, "dGVzdA==",
                 List.of(layer(1, LAWYER_ID, "lawyer", LAWYER_FP),
                         layer(3, NOMINEE_ID_1, "nominee", NOMINEE_1_FP)),
-                "initial");
+                "initial", null);
 
         AppException ex = assertThrows(AppException.class, () -> handler.storeBlob(bad, BEARER));
         assertEquals(ErrorCode.RECOVERY_INVALID_LAYER_ORDERING, ex.getErrorCode());
@@ -311,7 +311,7 @@ class StoreBlobHandlerTest {
                 "v1", VALID_BLOB_ID, huge,
                 List.of(layer(1, LAWYER_ID, "lawyer", LAWYER_FP),
                         layer(2, NOMINEE_ID_1, "nominee", NOMINEE_1_FP)),
-                "initial");
+                "initial", null);
 
         AppException ex = assertThrows(AppException.class, () -> handler.storeBlob(bad, BEARER));
         assertEquals(ErrorCode.RECOVERY_BLOB_TOO_LARGE, ex.getErrorCode());

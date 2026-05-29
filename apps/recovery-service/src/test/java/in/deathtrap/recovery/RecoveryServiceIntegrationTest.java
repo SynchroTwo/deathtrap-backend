@@ -76,7 +76,7 @@ class RecoveryServiceIntegrationTest extends IntegrationTestBase {
                         new BlobLayerRequest(lawyerId, "lawyer", TEST_FP, 1),
                         new BlobLayerRequest(nomineeId, "nominee", TEST_FP, 2)
                 ),
-                "initial");
+                "initial", null);
 
         ResponseEntity<?> resp = handler.storeBlob(req, "Bearer " + creatorToken);
 
@@ -117,7 +117,7 @@ class RecoveryServiceIntegrationTest extends IntegrationTestBase {
                                 new BlobLayerRequest(lawyerId, "lawyer", TEST_FP, 1),
                                 new BlobLayerRequest(nomineeId, "nominee", TEST_FP, 2)
                         ),
-                        "initial"),
+                        "initial", null),
                 "Bearer " + creatorToken);
 
         // Nominee initiates recovery session

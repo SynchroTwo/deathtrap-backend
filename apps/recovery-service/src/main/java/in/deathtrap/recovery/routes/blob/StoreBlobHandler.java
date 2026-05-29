@@ -44,20 +44,28 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.ServerSideEncryption;
 
 /** Handles storing a layered recovery blob from the creator.
- *  Implements Recovery Blob Format v1 per docs/RECOVERY_BLOB_FORMAT.md and
- *  docs/RECOVERY_SPEC_V1_BACKEND_CHANGES.md (rev 2). */
+ *  Implements Recovery Blob Format v1 (legacy) and v2 (E006).
+ *  Specs: docs/RECOVERY_BLOB_FORMAT.md, docs/RECOVERY_BLOB_FORMAT_V2.md,
+ *  ClaudeOutput/E006_BACKEND_CONTRACT.md §2-§4. */
 @RestController
 @RequestMapping("/recovery/blob")
 public class StoreBlobHandler {
 
     private static final Logger log = LoggerFactory.getLogger(StoreBlobHandler.class);
-    private static final List<String> SUPPORTED_SPEC_VERSIONS = List.of("v1");
-    private static final int MIN_LAYERS = 2;
-    private static final int MAX_LAYERS = 7;
+    private static final List<String> SUPPORTED_SPEC_VERSIONS = List.of("v1", "v2");
+    private static final String SHAPE_SEQUENTIAL = "sequential";
+    private static final String SHAPE_PARALLEL = "parallel";
+    // v1 layer bounds (lawyer + 1..6 nominees).
+    private static final int V1_MIN_LAYERS = 2;
+    private static final int V1_MAX_LAYERS = 7;
+    // v2 sequential trustee bounds per E006 contract §2.
+    private static final int V2_SEQ_MIN_LAYERS = 1;
+    private static final int V2_SEQ_MAX_LAYERS = 3;
     private static final int MAX_BLOB_B64_BYTES = 32 * 1024;
     private static final Set<String> ALLOWED_REBUILD_REASONS = Set.of(
             "initial", "nominee_added", "nominee_removed",
-            "lawyer_changed", "key_rotated", "other");
+            "lawyer_changed", "key_rotated", "other",
+            "recovery_model_switched");
     private static final Pattern UUID_PATTERN = Pattern.compile(
             "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
     private static final Pattern PEM_HEADERS = Pattern.compile(
@@ -66,6 +74,9 @@ public class StoreBlobHandler {
     private static final String SELECT_NOMINEE_OWNED =
             "SELECT 1 FROM nominees WHERE nominee_id = ? AND creator_id = ? " +
             "AND status = 'active'::nominee_status_enum LIMIT 1";
+    private static final String SELECT_NOMINEE_TRUSTEE =
+            "SELECT 1 FROM nominees WHERE nominee_id = ? AND creator_id = ? " +
+            "AND status = 'active'::nominee_status_enum AND is_trustee = TRUE LIMIT 1";
     private static final String SELECT_LAWYER_ACTIVE =
             "SELECT 1 FROM lawyers WHERE lawyer_id = ? " +
             "AND status = 'active'::lawyer_status_enum AND kyc_admin_approved = TRUE LIMIT 1";
@@ -83,12 +94,12 @@ public class StoreBlobHandler {
             "WHERE creator_id = ? AND status = 'active'";
     private static final String INSERT_BLOB =
             "INSERT INTO recovery_blobs (blob_id, creator_id, s3_key, layer_count, status, " +
-            "spec_version, salt_hex, encrypted_blob_b64, built_at, created_at) " +
-            "VALUES (?, ?, ?, ?, 'active', ?, ?, ?, NOW(), NOW())";
+            "spec_version, recovery_shape, salt_hex, encrypted_blob_b64, built_at, created_at) " +
+            "VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, NOW(), NOW())";
     private static final String INSERT_LAYER =
             "INSERT INTO recovery_blob_layers (layer_id, blob_id, layer_order, party_id, " +
-            "party_type, pubkey_id, key_fingerprint, spec_version, created_at) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())";
+            "party_type, pubkey_id, key_fingerprint, spec_version, recovery_shape, created_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())";
     private static final String UPDATE_LOCKER_BLOB_BUILT =
             "UPDATE locker_meta SET blob_built = TRUE, updated_at = NOW() WHERE user_id = ?";
 
@@ -154,11 +165,10 @@ public class StoreBlobHandler {
         }
 
         List<BlobLayerRequest> layers = request.layers();
+        String shape = resolveShape(request);
 
-        // Rule 3: layer count bounds
-        if (layers.size() < MIN_LAYERS || layers.size() > MAX_LAYERS) {
-            throw AppException.recoveryLayerCountOutOfBounds(layers.size());
-        }
+        // Rule 3: layer count bounds (shape-dependent in v2).
+        validateLayerCount(request.specVersion(), shape, layers.size());
 
         // Rule 8: encrypted blob size cap (on the base64 string itself — cheap pre-decode guard)
         if (request.encryptedBlobB64().length() > MAX_BLOB_B64_BYTES) {
@@ -171,8 +181,8 @@ public class StoreBlobHandler {
         // Rule 7: layerOrder dense 1..N
         validateLayerOrdering(layers);
 
-        // Rule 2: lawyer at order=1, nominees thereafter
-        validateRecipientOrder(layers);
+        // Rule 2: recipient order (shape-aware — v1 requires lawyer at 1, v2 sequential forbids lawyer).
+        validateRecipientOrder(request.specVersion(), shape, layers);
 
         // Rule 6: no duplicate recipients
         validateNoDuplicates(layers);
@@ -180,7 +190,7 @@ public class StoreBlobHandler {
         // Rules 4 + 5: existence + fingerprint match per layer
         List<String> resolvedPubkeyIds = new java.util.ArrayList<>(layers.size());
         for (BlobLayerRequest layer : layers) {
-            validateRecipientExistence(layer, creatorId);
+            validateRecipientExistence(layer, creatorId, request.specVersion(), shape);
             String pubkeyId = resolveAndVerifyPubkey(layer);
             resolvedPubkeyIds.add(pubkeyId);
         }
@@ -216,7 +226,7 @@ public class StoreBlobHandler {
                         .build());
             }
             dbClient.execute(INSERT_BLOB, blobId, creatorId, s3Key, layers.size(),
-                    request.specVersion(), saltHex, request.encryptedBlobB64());
+                    request.specVersion(), shape, saltHex, request.encryptedBlobB64());
             for (int i = 0; i < layers.size(); i++) {
                 BlobLayerRequest layer = layers.get(i);
                 String layerId = CsprngUtil.randomUlid();
@@ -225,7 +235,8 @@ public class StoreBlobHandler {
                         layer.partyId(), layer.partyType(),
                         resolvedPubkeyIds.get(i),
                         layer.keyFingerprint(),
-                        request.specVersion());
+                        request.specVersion(),
+                        shape);
             }
             dbClient.execute(UPDATE_LOCKER_BLOB_BUILT, creatorId);
             return null;
@@ -240,13 +251,14 @@ public class StoreBlobHandler {
                 .actorId(creatorId).actorType(PartyType.CREATOR).targetId(blobId)
                 .metadataJson(Map.of(
                         "specVersion", request.specVersion(),
+                        "recoveryShape", shape,
                         "layerCount", layers.size(),
                         "version", newVersion,
                         "rebuildReason", request.rebuildReason()))
                 .build());
 
-        log.info("Recovery blob stored: creatorId={} blobId={} layers={} version={} spec={}",
-                creatorId, blobId, layers.size(), newVersion, request.specVersion());
+        log.info("Recovery blob stored: creatorId={} blobId={} layers={} version={} spec={} shape={}",
+                creatorId, blobId, layers.size(), newVersion, request.specVersion(), shape);
 
         String requestId = UUID.randomUUID().toString();
         return ResponseEntity.status(201).body(ApiResponse.ok(
@@ -267,6 +279,47 @@ public class StoreBlobHandler {
         }
     }
 
+    /** Resolves the recovery shape from the request. v1 always = "sequential" (only shape supported).
+     *  v2 requires an explicit shape and rejects "parallel" until Phase 2 lands. */
+    private String resolveShape(StoreBlobRequest request) {
+        if ("v1".equals(request.specVersion())) {
+            return SHAPE_SEQUENTIAL;
+        }
+        String shape = request.recoveryShape();
+        if (shape == null || shape.isBlank()) {
+            throw AppException.validationFailed(Map.of(
+                    "field", "recoveryShape",
+                    "message", "Required for specVersion=v2"));
+        }
+        if (SHAPE_PARALLEL.equals(shape)) {
+            throw AppException.validationFailed(Map.of(
+                    "field", "recoveryShape",
+                    "message", "Model B (parallel) is Phase 2 — not yet supported on BE"));
+        }
+        if (!SHAPE_SEQUENTIAL.equals(shape)) {
+            throw AppException.validationFailed(Map.of(
+                    "field", "recoveryShape",
+                    "allowed", List.of(SHAPE_SEQUENTIAL, SHAPE_PARALLEL),
+                    "got", shape));
+        }
+        return SHAPE_SEQUENTIAL;
+    }
+
+    private void validateLayerCount(String specVersion, String shape, int count) {
+        if ("v1".equals(specVersion)) {
+            if (count < V1_MIN_LAYERS || count > V1_MAX_LAYERS) {
+                throw AppException.recoveryLayerCountOutOfBounds(count);
+            }
+        } else { // v2
+            if (SHAPE_SEQUENTIAL.equals(shape)) {
+                if (count < V2_SEQ_MIN_LAYERS || count > V2_SEQ_MAX_LAYERS) {
+                    throw AppException.recoveryLayerCountOutOfBounds(count);
+                }
+            }
+            // parallel: rejected earlier by resolveShape; if added later, validate wrap count separately.
+        }
+    }
+
     private void validateLayerOrdering(List<BlobLayerRequest> layers) {
         Set<Integer> seen = new HashSet<>();
         for (BlobLayerRequest layer : layers) {
@@ -281,19 +334,32 @@ public class StoreBlobHandler {
         }
     }
 
-    private void validateRecipientOrder(List<BlobLayerRequest> layers) {
-        BlobLayerRequest first = findByLayerOrder(layers, 1);
-        if (!"lawyer".equals(first.partyType())) {
-            throw AppException.recoveryInvalidRecipientOrder(
-                    "layerOrder=1 must be lawyer, got " + first.partyType());
-        }
-        for (BlobLayerRequest layer : layers) {
-            if (layer.layerOrder() == 1) {
-                continue;
-            }
-            if (!"nominee".equals(layer.partyType())) {
+    private void validateRecipientOrder(String specVersion, String shape, List<BlobLayerRequest> layers) {
+        if ("v1".equals(specVersion)) {
+            // Legacy: lawyer at order=1, nominees thereafter.
+            BlobLayerRequest first = findByLayerOrder(layers, 1);
+            if (!"lawyer".equals(first.partyType())) {
                 throw AppException.recoveryInvalidRecipientOrder(
-                        "layerOrder=" + layer.layerOrder() + " must be nominee, got " + layer.partyType());
+                        "layerOrder=1 must be lawyer, got " + first.partyType());
+            }
+            for (BlobLayerRequest layer : layers) {
+                if (layer.layerOrder() == 1) {
+                    continue;
+                }
+                if (!"nominee".equals(layer.partyType())) {
+                    throw AppException.recoveryInvalidRecipientOrder(
+                            "layerOrder=" + layer.layerOrder() + " must be nominee, got " + layer.partyType());
+                }
+            }
+        } else if (SHAPE_SEQUENTIAL.equals(shape)) {
+            // v2 sequential (Model A): all layers must be trustee nominees.
+            // Lawyer has no cryptographic role in v2.
+            for (BlobLayerRequest layer : layers) {
+                if (!"nominee".equals(layer.partyType())) {
+                    throw AppException.recoveryInvalidRecipientOrder(
+                            "v2 sequential layers must be partyType=nominee, got " + layer.partyType()
+                            + " at layerOrder=" + layer.layerOrder());
+                }
             }
         }
     }
@@ -307,19 +373,27 @@ public class StoreBlobHandler {
         }
     }
 
-    private void validateRecipientExistence(BlobLayerRequest layer, String creatorId) {
+    private void validateRecipientExistence(BlobLayerRequest layer, String creatorId,
+            String specVersion, String shape) {
         if ("nominee".equals(layer.partyType())) {
-            if (dbClient.queryOne(SELECT_NOMINEE_OWNED, ONE_MAPPER, layer.partyId(), creatorId).isEmpty()) {
+            // v2 sequential requires the nominee to also be a trustee (is_trustee=TRUE).
+            // v1 sequential (and any other shape) just needs active + owned by the creator —
+            // preserves backward compatibility for v1 blobs that predate the trustee flag.
+            boolean v2Sequential = "v2".equals(specVersion) && SHAPE_SEQUENTIAL.equals(shape);
+            String sql = v2Sequential
+                    ? SELECT_NOMINEE_TRUSTEE   // tightened for v2 sequential per E006 §10
+                    : SELECT_NOMINEE_OWNED;
+            if (dbClient.queryOne(sql, ONE_MAPPER, layer.partyId(), creatorId).isEmpty()) {
                 throw AppException.recoveryUnknownRecipient(layer.partyId(), layer.partyType());
             }
         } else if ("lawyer".equals(layer.partyType())) {
             if (dbClient.queryOne(SELECT_LAWYER_ACTIVE, ONE_MAPPER, layer.partyId()).isEmpty()) {
                 throw AppException.recoveryUnknownRecipient(layer.partyId(), layer.partyType());
             }
-            // Note: there is no creator->lawyer assignment table today. Any active,
-            // KYC-approved lawyer is acceptable as a recovery blob recipient. If
-            // product later adds a creator_lawyer_assignments table, tighten this
-            // to require an assignment row.
+            // E006 V020 added locker_meta.assigned_lawyer_id as the canonical 1:1 binding.
+            // v2 blobs never carry a lawyer layer (lawyer is consent-only, no crypto), so the
+            // 1:1 check applies to v1 legacy uploads only. Left permissive here for v1
+            // backward compatibility (existing staging blobs); tighten later if needed.
         } else {
             throw AppException.recoveryInvalidRecipientOrder(
                     "Unknown partyType: " + layer.partyType());
