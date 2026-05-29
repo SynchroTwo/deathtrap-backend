@@ -11,6 +11,7 @@ import in.deathtrap.common.types.enums.AuditEventType;
 import in.deathtrap.common.types.enums.AuditResult;
 import in.deathtrap.recovery.config.ActionLinkTokenService;
 import in.deathtrap.recovery.config.ActionLinkTokenService.ActionLinkClaims;
+import in.deathtrap.recovery.service.NotificationSenderService;
 import jakarta.validation.Valid;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -77,12 +78,15 @@ public class ConfirmationWindowActionHandler {
     private final DbClient dbClient;
     private final ActionLinkTokenService tokenService;
     private final AuditWriter auditWriter;
+    private final NotificationSenderService notificationSender;
 
     public ConfirmationWindowActionHandler(DbClient dbClient,
-            ActionLinkTokenService tokenService, AuditWriter auditWriter) {
+            ActionLinkTokenService tokenService, AuditWriter auditWriter,
+            NotificationSenderService notificationSender) {
         this.dbClient = dbClient;
         this.tokenService = tokenService;
         this.auditWriter = auditWriter;
+        this.notificationSender = notificationSender;
     }
 
     /** POST /recovery/window/{windowId}/confirm — record a confirmation response. */
@@ -128,6 +132,11 @@ public class ConfirmationWindowActionHandler {
 
         log.info("Confirmation recorded: windowId={} partyId={} partyType={} newStatus={}",
                 windowId, claims.partyId(), claims.partyType(), newStatus);
+
+        // §2 fan-out: notify all parties except the confirmer.
+        notificationSender.fanOutConfirmationRecorded(windowId, window.creatorId,
+                claims.partyId(), claims.partyType(),
+                window.expiresAt != null ? window.expiresAt : Instant.now());
 
         String requestId = UUID.randomUUID().toString();
         return ResponseEntity.ok(ApiResponse.ok(
@@ -181,6 +190,10 @@ public class ConfirmationWindowActionHandler {
 
         log.info("Objection recorded: windowId={} partyId={} partyType={} cooloffUntil={}",
                 windowId, claims.partyId(), claims.partyType(), cooloff);
+
+        // §3 fan-out: cancellation notice to all parties.
+        notificationSender.fanOutObjection(windowId, window.creatorId, claims.partyId(),
+                claims.partyType(), body != null ? body.reason() : null, cooloff);
 
         String requestId = UUID.randomUUID().toString();
         return ResponseEntity.ok(ApiResponse.ok(

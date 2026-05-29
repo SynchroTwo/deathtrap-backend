@@ -263,5 +263,166 @@ public class NotificationSenderService {
         return email.charAt(0) + "***" + email.substring(at);
     }
 
+    /** §2 — confirmation recorded → notify all parties except the confirming one.
+     *  Purely informational, no action links. Per copy doc §2. */
+    public void fanOutConfirmationRecorded(String windowId, String creatorId,
+            String confirmingPartyId, PartyType confirmingPartyType, Instant expiresAt) {
+        if (!notificationsEnabled) return;
+        try {
+            String creatorName = lookupName(creatorId);
+            String confirmingPartyName = lookupNameForParty(confirmingPartyId, confirmingPartyType);
+            String confirmingPartyRole = roleLabel(confirmingPartyId, confirmingPartyType, creatorId);
+            String when = HUMAN_DATE.format(expiresAt);
+
+            String subject = confirmingPartyName + " confirmed — " + creatorName + "'s recovery window";
+            String body = "Hi {recipientName},\n\n"
+                    + confirmingPartyName + " (" + confirmingPartyRole + ") has confirmed the "
+                    + "recovery for " + creatorName + "'s locker. Unless an objection arrives by "
+                    + when + ", recovery will proceed.\n";
+
+            sendToAllExcept(creatorId, confirmingPartyId, "confirmation_recorded", windowId,
+                    subject, body);
+        } catch (Exception ex) {
+            log.error("Confirmation fan-out failed: windowId={} err={}", windowId, ex.getMessage());
+        }
+    }
+
+    /** §3 — objection recorded → cancellation notice to all parties. */
+    public void fanOutObjection(String windowId, String creatorId, String objectingPartyId,
+            PartyType objectingPartyType, String reason, Instant cooloffUntil) {
+        if (!notificationsEnabled) return;
+        try {
+            String creatorName = lookupName(creatorId);
+            String objectingPartyName = lookupNameForParty(objectingPartyId, objectingPartyType);
+            String objectingPartyRole = roleLabel(objectingPartyId, objectingPartyType, creatorId);
+
+            String subject = "Recovery cancelled — " + creatorName + "'s locker";
+            String reasonBlock = (reason != null && !reason.isBlank())
+                    ? "\n> \"" + sanitiseReason(reason) + "\"\n"
+                    : "";
+            String body = "Hi {recipientName},\n\n"
+                    + "The recovery window for " + creatorName + "'s locker has been cancelled.\n\n"
+                    + objectingPartyName + " (" + objectingPartyRole + ") submitted an objection."
+                    + reasonBlock
+                    + "\nA 24-hour cooloff is now in effect (until " + HUMAN_DATE.format(cooloffUntil)
+                    + "). After that, any trustee or nominee may upload a fresh death certificate "
+                    + "to restart the process.\n";
+
+            sendToAll(creatorId, "objection_recorded", windowId, subject, body);
+        } catch (Exception ex) {
+            log.error("Objection fan-out failed: windowId={} err={}", windowId, ex.getMessage());
+        }
+    }
+
+    /** §4 — window expired without objection → recovery proceeding. */
+    public void fanOutWindowExpired(String windowId, String creatorId, int windowHours) {
+        if (!notificationsEnabled) return;
+        try {
+            String creatorName = lookupName(creatorId);
+            String subject = "Recovery proceeding — " + creatorName + "'s locker";
+            String body = "Hi {recipientName},\n\n"
+                    + "The " + windowHours + "-hour confirmation window for " + creatorName
+                    + "'s locker has closed without any objections. Recovery is now proceeding.\n\n"
+                    + "If you're a trustee, you may now begin the peel chain from the app.\n";
+            sendToAll(creatorId, "window_expired", windowId, subject, body);
+        } catch (Exception ex) {
+            log.error("Window-expired fan-out failed: windowId={} err={}", windowId, ex.getMessage());
+        }
+    }
+
+    /** §5 — lawyer silence at 168h → cancellation. */
+    public void fanOutLawyerSilent(String windowId, String creatorId, Instant cooloffUntil) {
+        if (!notificationsEnabled) return;
+        try {
+            String creatorName = lookupName(creatorId);
+            Optional<Recipient> lawyerOpt = dbClient.queryOne(SELECT_LAWYER, RECIPIENT_MAPPER, creatorId);
+            String lawyerName = lawyerOpt.map(r -> r.fullName).orElse("the designated lawyer");
+
+            String subject = "Recovery cancelled — lawyer did not respond";
+            String body = "Hi {recipientName},\n\n"
+                    + "The 168-hour mandatory consent window for the designated lawyer ("
+                    + lawyerName + ") has expired without a response. Per the locker's "
+                    + "configuration, lawyer silence is treated as an objection.\n\n"
+                    + "Recovery for " + creatorName + "'s locker is now cancelled. A 24-hour "
+                    + "cooloff is in effect (until " + HUMAN_DATE.format(cooloffUntil)
+                    + ") before a fresh death certificate may be uploaded.\n";
+            sendToAll(creatorId, "lawyer_silent", windowId, subject, body);
+        } catch (Exception ex) {
+            log.error("Lawyer-silent fan-out failed: windowId={} err={}", windowId, ex.getMessage());
+        }
+    }
+
+    private void sendToAll(String creatorId, String scenario, String windowId,
+            String subject, String bodyTemplate) {
+        // Creator
+        dbClient.queryOne(SELECT_USER, RECIPIENT_MAPPER, creatorId).ifPresent(creator ->
+                sendOne(creator, "creator", scenario, windowId, subject, bodyTemplate));
+        // Nominees
+        for (Recipient n : dbClient.query(SELECT_ACTIVE_NOMINEES, RECIPIENT_MAPPER, creatorId)) {
+            sendOne(n, "nominee", scenario, windowId, subject, bodyTemplate);
+        }
+        // Lawyer
+        dbClient.queryOne(SELECT_LAWYER, RECIPIENT_MAPPER, creatorId).ifPresent(l ->
+                sendOne(l, "lawyer", scenario, windowId, subject, bodyTemplate));
+    }
+
+    private void sendToAllExcept(String creatorId, String excludePartyId, String scenario,
+            String windowId, String subject, String bodyTemplate) {
+        dbClient.queryOne(SELECT_USER, RECIPIENT_MAPPER, creatorId).ifPresent(creator -> {
+            if (!creator.partyId.equals(excludePartyId)) {
+                sendOne(creator, "creator", scenario, windowId, subject, bodyTemplate);
+            }
+        });
+        for (Recipient n : dbClient.query(SELECT_ACTIVE_NOMINEES, RECIPIENT_MAPPER, creatorId)) {
+            if (!n.partyId.equals(excludePartyId)) {
+                sendOne(n, "nominee", scenario, windowId, subject, bodyTemplate);
+            }
+        }
+        dbClient.queryOne(SELECT_LAWYER, RECIPIENT_MAPPER, creatorId).ifPresent(l -> {
+            if (!l.partyId.equals(excludePartyId)) {
+                sendOne(l, "lawyer", scenario, windowId, subject, bodyTemplate);
+            }
+        });
+    }
+
+    private void sendOne(Recipient r, String role, String scenario, String windowId,
+            String subject, String bodyTemplate) {
+        try {
+            String body = bodyTemplate.replace("{recipientName}", nullToEmpty(r.fullName));
+            sendEmail(r.email, subject, body, windowId, scenario + "/" + role);
+        } catch (Exception ex) {
+            log.error("Fan-out send failed: scenario={} windowId={} role={} err={}",
+                    scenario, windowId, role, ex.getMessage());
+        }
+    }
+
+    private String lookupName(String userId) {
+        return dbClient.queryOne(SELECT_USER, RECIPIENT_MAPPER, userId)
+                .map(r -> r.fullName).orElse("");
+    }
+
+    /** Resolves a party's display name. For nominees the partyId is nominee_id;
+     *  the underlying user row is keyed on user_id (== nominee_id by our schema). */
+    private String lookupNameForParty(String partyId, PartyType type) {
+        return dbClient.queryOne(SELECT_USER, RECIPIENT_MAPPER, partyId)
+                .map(r -> r.fullName).orElse(type.name().toLowerCase());
+    }
+
+    /** "creator" | "trustee" | "nominee" | "lawyer" — the role label shown in copy. */
+    private String roleLabel(String partyId, PartyType type, String creatorId) {
+        if (type == PartyType.CREATOR || partyId.equals(creatorId)) return "creator";
+        if (type == PartyType.LAWYER) return "lawyer";
+        // Nominee — check is_trustee for "trustee" vs "nominee" label.
+        Boolean isTrustee = dbClient.queryOne(
+                "SELECT is_trustee FROM nominees WHERE nominee_id = ? AND creator_id = ? LIMIT 1",
+                (rs, row) -> rs.getBoolean("is_trustee"), partyId, creatorId).orElse(false);
+        return isTrustee ? "trustee" : "nominee";
+    }
+
+    private static String sanitiseReason(String reason) {
+        String trimmed = reason.replace("\r", " ").replace("\n", " ").trim();
+        return trimmed.length() > 500 ? trimmed.substring(0, 500) + "…" : trimmed;
+    }
+
     private record Recipient(String partyId, String fullName, String email) {}
 }

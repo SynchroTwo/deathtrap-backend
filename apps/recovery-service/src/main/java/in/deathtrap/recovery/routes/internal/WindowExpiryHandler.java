@@ -9,6 +9,7 @@ import in.deathtrap.common.types.api.ApiResponse;
 import in.deathtrap.common.types.enums.AuditEventType;
 import in.deathtrap.common.types.enums.AuditResult;
 import in.deathtrap.common.types.enums.PartyType;
+import in.deathtrap.recovery.service.NotificationSenderService;
 import java.security.MessageDigest;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -49,7 +50,7 @@ public class WindowExpiryHandler {
     private static final String INTERNAL_HEADER = "X-Internal-Token";
 
     private static final String SELECT_PENDING_WINDOWS =
-            "SELECT window_id, creator_id, expires_at, lawyer_expires_at, lawyer_designated " +
+            "SELECT window_id, creator_id, window_hours, expires_at, lawyer_expires_at, lawyer_designated " +
             "FROM confirmation_window WHERE status = 'pending' AND " +
             "(expires_at <= NOW() OR (lawyer_designated = TRUE AND lawyer_expires_at <= NOW()))";
     private static final String COUNT_LAWYER_CONFIRM =
@@ -67,6 +68,7 @@ public class WindowExpiryHandler {
     private static final RowMapper<PendingWindow> PENDING_MAPPER = (rs, row) -> new PendingWindow(
             rs.getString("window_id"),
             rs.getString("creator_id"),
+            rs.getInt("window_hours"),
             rs.getTimestamp("expires_at").toInstant(),
             rs.getTimestamp("lawyer_expires_at") != null
                     ? rs.getTimestamp("lawyer_expires_at").toInstant() : null,
@@ -75,13 +77,16 @@ public class WindowExpiryHandler {
 
     private final DbClient dbClient;
     private final AuditWriter auditWriter;
+    private final NotificationSenderService notificationSender;
 
     @Value("${INTERNAL_WORKER_SECRET:}")
     private String internalWorkerSecret;
 
-    public WindowExpiryHandler(DbClient dbClient, AuditWriter auditWriter) {
+    public WindowExpiryHandler(DbClient dbClient, AuditWriter auditWriter,
+            NotificationSenderService notificationSender) {
         this.dbClient = dbClient;
         this.auditWriter = auditWriter;
+        this.notificationSender = notificationSender;
     }
 
     /** POST /recovery/internal/window-tick — process expiry transitions for pending windows. */
@@ -117,6 +122,8 @@ public class WindowExpiryHandler {
                             .build());
                     log.info("Window flipped lawyer_silent: windowId={} creatorId={}",
                             w.windowId, w.creatorId);
+                    // §5 fan-out: cancellation notice to all parties.
+                    notificationSender.fanOutLawyerSilent(w.windowId, w.creatorId, cooloff);
                 }
             } else if (!now.isBefore(w.expiresAt)) {
                 int updated = dbClient.execute(UPDATE_AUTOCONFIRM, w.windowId);
@@ -132,6 +139,8 @@ public class WindowExpiryHandler {
                             .build());
                     log.info("Window auto-confirmed by expiry: windowId={} creatorId={}",
                             w.windowId, w.creatorId);
+                    // §4 fan-out: recovery proceeding notice to all parties.
+                    notificationSender.fanOutWindowExpired(w.windowId, w.creatorId, w.windowHours);
                 }
             }
         }
@@ -161,8 +170,8 @@ public class WindowExpiryHandler {
         }
     }
 
-    private record PendingWindow(String windowId, String creatorId, Instant expiresAt,
-            Instant lawyerExpiresAt, boolean lawyerDesignated) {}
+    private record PendingWindow(String windowId, String creatorId, int windowHours,
+            Instant expiresAt, Instant lawyerExpiresAt, boolean lawyerDesignated) {}
 
     private record TickResponse(int candidates, int confirmed, int lawyerSilent) {}
 }
