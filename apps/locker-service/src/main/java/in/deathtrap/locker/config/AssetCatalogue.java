@@ -3,7 +3,7 @@ package in.deathtrap.locker.config;
 import in.deathtrap.common.types.enums.AssetType;
 import java.util.List;
 
-/** Canonical list of the 24 predefined asset categories seeded at locker initialisation. */
+/** Canonical list of the 25 predefined asset categories seeded at locker initialisation. */
 public final class AssetCatalogue {
 
     public static final List<AssetEntry> ALL = List.of(
@@ -30,7 +30,8 @@ public final class AssetCatalogue {
             new AssetEntry("gratuity_superannuation",   AssetType.OFFLINE),
             new AssetEntry("personal_documents",        AssetType.OFFLINE),
             new AssetEntry("unorganised_notes",         AssetType.OFFLINE),
-            new AssetEntry("cash_physical",             AssetType.OFFLINE)
+            new AssetEntry("cash_physical",             AssetType.OFFLINE),
+            new AssetEntry("physical_locker",           AssetType.OFFLINE)
     );
 
     public record AssetEntry(String categoryCode, AssetType assetType) {}
