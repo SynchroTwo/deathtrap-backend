@@ -7,6 +7,7 @@ import in.deathtrap.common.errors.AppException;
 import in.deathtrap.common.errors.ErrorCode;
 import in.deathtrap.common.types.dto.NomineeAssignRequest;
 import in.deathtrap.locker.config.JwtService;
+import in.deathtrap.locker.routes.backup.ManagedBackupHandler;
 import in.deathtrap.locker.routes.locker.InitLockerHandler;
 import in.deathtrap.locker.routes.nominee.AssignNomineeHandler;
 import io.jsonwebtoken.Jwts;
@@ -72,6 +73,52 @@ class LockerServiceIntegrationTest extends IntegrationTestBase {
         AppException ex = assertThrows(AppException.class,
                 () -> handler.initLocker("Bearer " + token));
         assertEquals(ErrorCode.CONFLICT, ex.getErrorCode());
+    }
+
+    @Test
+    void managedBackup_statusEnableDisableRoundTrip() {
+        String creatorId = insertUser("+915555555555", "backup@example.com");
+        String token = issueCreatorJwt(creatorId);
+
+        new InitLockerHandler(db, LOCKER_JWT, AUDIT).initLocker("Bearer " + token);
+        var handler = new ManagedBackupHandler(db, LOCKER_JWT, AUDIT);
+
+        // Status on a fresh locker — disabled by default (V015 DEFAULT FALSE).
+        ResponseEntity<?> status = handler.getStatus("Bearer " + token);
+        assertEquals(200, status.getStatusCode().value());
+        Boolean enabledBefore = jdbc.queryForObject(
+                "SELECT managed_backup_enabled FROM locker_meta WHERE user_id = ?",
+                Boolean.class, creatorId);
+        assertEquals(Boolean.FALSE, enabledBefore);
+
+        // Enable flips the column TRUE and stamps enabled_at.
+        handler.enable("Bearer " + token);
+        Boolean enabledAfter = jdbc.queryForObject(
+                "SELECT managed_backup_enabled FROM locker_meta WHERE user_id = ?",
+                Boolean.class, creatorId);
+        assertEquals(Boolean.TRUE, enabledAfter);
+        Integer stampedRows = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM locker_meta " +
+                "WHERE user_id = ? AND managed_backup_enabled_at IS NOT NULL",
+                Integer.class, creatorId);
+        assertEquals(1, stampedRows);
+
+        // Enable a second time — idempotent, no audit row from this call.
+        // (We can't observe audit-row count here without a reset; just confirm 200.)
+        ResponseEntity<?> reEnable = handler.enable("Bearer " + token);
+        assertEquals(200, reEnable.getStatusCode().value());
+
+        // Disable flips the column back FALSE and nulls enabled_at.
+        handler.disable("Bearer " + token);
+        Boolean disabledAfter = jdbc.queryForObject(
+                "SELECT managed_backup_enabled FROM locker_meta WHERE user_id = ?",
+                Boolean.class, creatorId);
+        assertEquals(Boolean.FALSE, disabledAfter);
+        Integer nullStampRows = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM locker_meta " +
+                "WHERE user_id = ? AND managed_backup_enabled_at IS NULL",
+                Integer.class, creatorId);
+        assertEquals(1, nullStampRows);
     }
 
     @Test
