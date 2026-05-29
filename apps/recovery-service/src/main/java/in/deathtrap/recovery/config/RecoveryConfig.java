@@ -17,32 +17,44 @@ public class RecoveryConfig {
 
     private static final Logger log = LoggerFactory.getLogger(RecoveryConfig.class);
 
-    /** Creates the JwtService bean. Reads JWT_SECRET_ARN from Secrets Manager when
+    /** Resolves the HS256 signing secret once for both JwtService and
+     *  ActionLinkTokenService. Reads JWT_SECRET_ARN from Secrets Manager when
      *  set (Lambda/AWS), otherwise falls back to JWT_SECRET env var (local dev). */
     @Bean
-    public JwtService jwtService(DbClient dbClient) {
-        String secret;
+    public String jwtSigningSecret() {
         String jwtSecretArn = System.getenv("JWT_SECRET_ARN");
         if (jwtSecretArn != null && !jwtSecretArn.isBlank()) {
             String region = System.getenv().getOrDefault("AWS_REGION", "ap-south-1");
             try (SecretsManagerClient smClient = SecretsManagerClient.builder()
                     .region(Region.of(region))
                     .build()) {
-                secret = smClient.getSecretValue(
+                String secret = smClient.getSecretValue(
                         GetSecretValueRequest.builder().secretId(jwtSecretArn).build()
                 ).secretString();
                 log.info("Loaded JWT secret from Secrets Manager secret {}", jwtSecretArn);
+                return secret;
             } catch (Exception e) {
                 throw new IllegalStateException(
                         "Failed to fetch JWT secret from Secrets Manager: " + e.getMessage(), e);
             }
-        } else {
-            secret = System.getenv("JWT_SECRET");
-            if (secret == null || secret.isBlank()) {
-                throw new IllegalStateException("JWT_SECRET_ARN or JWT_SECRET environment variable is required");
-            }
         }
-        return new JwtService(secret, dbClient);
+        String envSecret = System.getenv("JWT_SECRET");
+        if (envSecret == null || envSecret.isBlank()) {
+            throw new IllegalStateException("JWT_SECRET_ARN or JWT_SECRET environment variable is required");
+        }
+        return envSecret;
+    }
+
+    /** Session-token validator. */
+    @Bean
+    public JwtService jwtService(String jwtSigningSecret, DbClient dbClient) {
+        return new JwtService(jwtSigningSecret, dbClient);
+    }
+
+    /** Action-link token mint+verify (E006 confirmation flow). */
+    @Bean
+    public ActionLinkTokenService actionLinkTokenService(String jwtSigningSecret) {
+        return new ActionLinkTokenService(jwtSigningSecret);
     }
 
     /** Creates the TransactionTemplate bean used by DbClient. */

@@ -53,6 +53,7 @@ class RecoveryServiceIntegrationTest extends IntegrationTestBase {
         return new String[]{
             "audit_log", "blob_rebuild_log", "recovery_peel_events", "recovery_sessions",
             "recovery_blob_layers", "recovery_blobs", "trigger_events",
+            "confirmation_responses", "confirmation_window", "death_cert_uploads",
             "nominees", "party_public_keys", "party_salts",
             "encrypted_privkey_blobs", "sessions", "users"
         };
