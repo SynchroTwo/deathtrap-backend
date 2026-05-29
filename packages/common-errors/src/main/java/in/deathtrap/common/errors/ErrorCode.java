@@ -55,6 +55,13 @@ public enum ErrorCode {
     RECOVERY_WINDOW_CONFIRMED(409, "Confirmation window has already been confirmed"),
     RECOVERY_CERT_HASH_MISMATCH(409, "Death certificate hash does not match the decoded bytes"),
 
+    // E011 — Family Vault (Path Y, read-only-for-nominees)
+    FAMILY_VAULT_MODE_REQUIRED(412, "Locker must be in family_vault mode before adding wraps"),
+    FAMILY_VAULT_WRAP_ALREADY_EXISTS(409, "An active Family Vault wrap already exists for this nominee"),
+    FAMILY_VAULT_WRAP_NOT_FOUND(404, "Family Vault wrap not found"),
+    FAMILY_VAULT_WRAP_ALREADY_REVOKED(409, "Family Vault wrap has already been revoked"),
+    FAMILY_VAULT_WRAP_REVOKED(403, "Your Family Vault access has been revoked"),
+
     // Server
     INTERNAL_ERROR(500, "An unexpected error occurred"),
     EXTERNAL_SERVICE_ERROR(502, "External service unavailable"),

@@ -4,6 +4,7 @@ import in.deathtrap.common.audit.AuditWritePayload;
 import in.deathtrap.common.audit.AuditWriter;
 import in.deathtrap.common.db.DbClient;
 import in.deathtrap.common.errors.AppException;
+import in.deathtrap.common.errors.ErrorCode;
 import in.deathtrap.common.types.api.ApiResponse;
 import in.deathtrap.common.types.dto.JwtPayload;
 import in.deathtrap.common.types.enums.AuditEventType;
@@ -15,6 +16,7 @@ import in.deathtrap.locker.rowmapper.BlobVersionRowMapper.BlobVersion;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,6 +51,14 @@ public class DownloadBlobHandler {
             "JOIN recovery_blobs rb ON rbl.blob_id = rb.blob_id " +
             "WHERE rb.creator_id = lm.user_id AND rbl.party_type = 'lawyer'::party_type_enum " +
             "AND rb.status = 'active'::recovery_blob_status_enum LIMIT 1";
+    // E011 Path Y: nominee fetches via an active family_vault_wraps row.
+    private static final String SELECT_LOCKER_FOR_FAMILY_VAULT =
+            "SELECT lm.locker_id, fvw.wrap_id FROM family_vault_wraps fvw " +
+            "JOIN locker_meta lm ON lm.user_id = fvw.creator_id " +
+            "WHERE fvw.nominee_party_id = ? AND fvw.status = 'active' " +
+            "ORDER BY fvw.created_at DESC LIMIT 1";
+    private static final String SELECT_REVOKED_WRAP_EXISTS =
+            "SELECT 1 FROM family_vault_wraps WHERE nominee_party_id = ? AND status = 'revoked' LIMIT 1";
     private static final String SELECT_BLOB =
             "SELECT bv.blob_id, bv.asset_id, bv.locker_id, bv.s3_key, bv.size_bytes, " +
             "bv.content_hash_sha256, bv.schema_version, bv.version, bv.is_current, bv.created_at, bv.updated_at " +
@@ -57,6 +67,9 @@ public class DownloadBlobHandler {
             "WHERE ai.locker_id = ? AND ai.category_code = ? AND bv.is_current = TRUE LIMIT 1";
 
     private static final RowMapper<String> STRING_MAPPER = (rs, row) -> rs.getString(1);
+    private static final RowMapper<Integer> ONE_MAPPER = (rs, row) -> 1;
+    private static final RowMapper<FvLockerRow> FV_LOCKER_MAPPER = (rs, row) ->
+            new FvLockerRow(rs.getString("locker_id"), rs.getString("wrap_id"));
 
     private final DbClient dbClient;
     private final JwtService jwtService;
@@ -88,7 +101,8 @@ public class DownloadBlobHandler {
         String partyId = jwt.sub();
         PartyType partyType = jwt.partyType();
 
-        String lockerId = resolveLockerId(partyId, partyType);
+        LockerResolution resolution = resolveLockerId(partyId, partyType);
+        String lockerId = resolution.lockerId();
 
         List<BlobVersion> blobRows = dbClient.query(SELECT_BLOB, BlobVersionRowMapper.INSTANCE, lockerId, categoryCode);
         if (blobRows.isEmpty()) {
@@ -98,8 +112,17 @@ public class DownloadBlobHandler {
 
         String downloadUrl = buildPresignedUrl(blob);
 
-        auditWriter.write(AuditWritePayload.builder(AuditEventType.BLOB_ACCESSED, AuditResult.SUCCESS)
-                .actorId(partyId).actorType(partyType).targetId(blob.assetId()).build());
+        AuditWritePayload.Builder auditBuilder = AuditWritePayload
+                .builder(AuditEventType.BLOB_ACCESSED, AuditResult.SUCCESS)
+                .actorId(partyId).actorType(partyType).targetId(blob.assetId());
+        if (resolution.viaWrapId() != null) {
+            auditBuilder.metadataJson(Map.of(
+                    "actorPartyType", partyType.name(),
+                    "viaWrapId", resolution.viaWrapId()));
+        } else {
+            auditBuilder.metadataJson(Map.of("actorPartyType", partyType.name()));
+        }
+        auditWriter.write(auditBuilder.build());
 
         String requestId = UUID.randomUUID().toString();
         return ResponseEntity.ok(ApiResponse.ok(
@@ -115,23 +138,41 @@ public class DownloadBlobHandler {
                 requestId));
     }
 
-    private String resolveLockerId(String partyId, PartyType partyType) {
-        String sql;
+    private LockerResolution resolveLockerId(String partyId, PartyType partyType) {
         if (partyType == PartyType.CREATOR) {
-            sql = SELECT_LOCKER_FOR_CREATOR;
-        } else if (partyType == PartyType.NOMINEE) {
-            sql = SELECT_LOCKER_FOR_NOMINEE;
-        } else if (partyType == PartyType.LAWYER) {
-            sql = SELECT_LOCKER_FOR_LAWYER;
-        } else {
+            List<String> rows = dbClient.query(SELECT_LOCKER_FOR_CREATOR, STRING_MAPPER, partyId);
+            if (rows.isEmpty()) throw AppException.forbidden();
+            return new LockerResolution(rows.get(0), null);
+        }
+        if (partyType == PartyType.NOMINEE) {
+            // E011 Path Y: prefer Family Vault wrap if active.
+            List<FvLockerRow> fvRows = dbClient.query(SELECT_LOCKER_FOR_FAMILY_VAULT, FV_LOCKER_MAPPER, partyId);
+            if (!fvRows.isEmpty()) {
+                return new LockerResolution(fvRows.get(0).lockerId(), fvRows.get(0).wrapId());
+            }
+            // Else fall back to existing E006-style nominee resolution.
+            List<String> rows = dbClient.query(SELECT_LOCKER_FOR_NOMINEE, STRING_MAPPER, partyId);
+            if (!rows.isEmpty()) return new LockerResolution(rows.get(0), null);
+            // No access path resolved — if the nominee USED to have a wrap, emit
+            // the distinctive code so the FE can show a "your access was revoked"
+            // landing instead of generic forbidden.
+            if (dbClient.queryOne(SELECT_REVOKED_WRAP_EXISTS, ONE_MAPPER, partyId).isPresent()) {
+                throw new AppException(ErrorCode.FAMILY_VAULT_WRAP_REVOKED,
+                        "Your Family Vault access has been revoked");
+            }
             throw AppException.forbidden();
         }
-        List<String> rows = dbClient.query(sql, STRING_MAPPER, partyId);
-        if (rows.isEmpty()) {
-            throw AppException.forbidden();
+        if (partyType == PartyType.LAWYER) {
+            List<String> rows = dbClient.query(SELECT_LOCKER_FOR_LAWYER, STRING_MAPPER, partyId);
+            if (rows.isEmpty()) throw AppException.forbidden();
+            return new LockerResolution(rows.get(0), null);
         }
-        return rows.get(0);
+        throw AppException.forbidden();
     }
+
+    private record LockerResolution(String lockerId, String viaWrapId) {}
+
+    private record FvLockerRow(String lockerId, String wrapId) {}
 
     private String buildPresignedUrl(BlobVersion blob) {
         if (s3BucketName == null || s3BucketName.isBlank() || blob.s3Key() == null) {

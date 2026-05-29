@@ -80,9 +80,12 @@ class DownloadBlobHandlerTest {
     @Test
     void nomineeDownloadsCreatorBlob_resolvesLockerReturnsUrl() {
         when(jwtService.validateToken(anyString())).thenReturn(nomineeJwt());
-        when(dbClient.query(anyString(), any(), any()))          // 1-vararg: locker resolution
-                .thenReturn(List.of("locker-1"));
-        when(dbClient.query(anyString(), any(), any(), any()))   // 2-vararg: SELECT_BLOB
+        // Nominee resolveLockerId now checks FV wrap first (empty here), then
+        // falls through to the existing E006-style nominee link.
+        when(dbClient.query(anyString(), any(), any()))            // 1-vararg: locker resolution
+                .thenReturn(List.of())                              // FV path: no wrap
+                .thenReturn(List.of("locker-1"));                   // E006 fallback: locker found
+        when(dbClient.query(anyString(), any(), any(), any()))     // 2-vararg: SELECT_BLOB
                 .thenReturn(List.of(activeBlobVersion()));
 
         ResponseEntity<?> response = handler.downloadBlob("bank_accounts", BEARER);
