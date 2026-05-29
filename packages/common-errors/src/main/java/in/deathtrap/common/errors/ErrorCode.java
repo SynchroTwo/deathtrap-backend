@@ -53,6 +53,7 @@ public enum ErrorCode {
     RECOVERY_TOKEN_ALREADY_USED(409, "Action-link token has already been used"),
     RECOVERY_WINDOW_OBJECTED(409, "Confirmation window has already been objected"),
     RECOVERY_WINDOW_CONFIRMED(409, "Confirmation window has already been confirmed"),
+    RECOVERY_CERT_HASH_MISMATCH(409, "Death certificate hash does not match the decoded bytes"),
 
     // Server
     INTERNAL_ERROR(500, "An unexpected error occurred"),

@@ -18,6 +18,7 @@ dependencies {
     implementation("io.jsonwebtoken:jjwt-api:0.12.5")
     implementation("software.amazon.awssdk:s3:2.26.31")
     implementation("software.amazon.awssdk:secretsmanager:2.26.31")
+    implementation("software.amazon.awssdk:ses:2.26.31")
     implementation("software.amazon.awssdk:sqs:2.26.31")
     implementation("software.amazon.awssdk:url-connection-client:2.26.31")
     implementation("net.logstash.logback:logstash-logback-encoder:8.0")

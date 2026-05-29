@@ -14,6 +14,7 @@ import in.deathtrap.common.types.enums.AuditEventType;
 import in.deathtrap.common.types.enums.AuditResult;
 import in.deathtrap.common.types.enums.PartyType;
 import in.deathtrap.recovery.config.JwtService;
+import in.deathtrap.recovery.service.NotificationSenderService;
 import jakarta.validation.Valid;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -53,6 +54,8 @@ public class UploadDeathCertHandler {
     private static final String SELECT_NOMINEE_OWNED =
             "SELECT 1 FROM nominees WHERE nominee_id = ? AND creator_id = ? " +
             "AND status = 'active'::nominee_status_enum LIMIT 1";
+    private static final String SELECT_UPLOADER_NAME =
+            "SELECT full_name FROM users WHERE user_id = ? LIMIT 1";
     private static final String SELECT_NOMINEE_TRUSTEE =
             "SELECT 1 FROM nominees WHERE nominee_id = ? AND creator_id = ? " +
             "AND status = 'active'::nominee_status_enum AND is_trustee = TRUE LIMIT 1";
@@ -90,6 +93,7 @@ public class UploadDeathCertHandler {
     private final JwtService jwtService;
     private final AuditWriter auditWriter;
     private final S3Client s3Client;
+    private final NotificationSenderService notificationSender;
 
     @Value("${S3_BUCKET_NAME:}")
     private String s3BucketName;
@@ -101,11 +105,13 @@ public class UploadDeathCertHandler {
     private String environment;
 
     public UploadDeathCertHandler(DbClient dbClient, JwtService jwtService,
-            AuditWriter auditWriter, S3Client s3Client) {
+            AuditWriter auditWriter, S3Client s3Client,
+            NotificationSenderService notificationSender) {
         this.dbClient = dbClient;
         this.jwtService = jwtService;
         this.auditWriter = auditWriter;
         this.s3Client = s3Client;
+        this.notificationSender = notificationSender;
     }
 
     /** POST /recovery/death-cert — see contract §8. */
@@ -193,12 +199,17 @@ public class UploadDeathCertHandler {
                             "windowHours", plan.newWindow.windowHours,
                             "lawyerDesignated", plan.newWindow.lawyerDesignated))
                     .build());
-            // Phase 1 ships email-only notifications via SES; SES template wiring lands in a
-            // follow-up commit once UI provides the notification copy file. The window itself
-            // is already actionable via the action-link endpoints (POST /recovery/window/...).
             log.info("Confirmation window started: windowId={} creatorId={} cycle={} hours={} lawyer={}",
                     plan.newWindow.windowId, creatorId, plan.newWindow.cycleNumber,
                     plan.newWindow.windowHours, plan.newWindow.lawyerDesignated);
+
+            // Phase 1 fan-out: best-effort email via SES. Failures are logged inside the service
+            // and never propagate — never blocks the HTTP response.
+            String uploaderName = dbClient.queryOne(SELECT_UPLOADER_NAME, STRING_MAPPER, uploaderId)
+                    .orElse("a trustee");
+            notificationSender.fanOutNewCycle(creatorId, plan.newWindow.windowId,
+                    plan.newWindow.windowHours, uploaderName,
+                    plan.newWindow.expiresAt, plan.newWindow.lawyerExpiresAt);
         }
 
         log.info("Death cert uploaded: certId={} creatorId={} uploader={} windowAction={}",
@@ -266,9 +277,8 @@ public class UploadDeathCertHandler {
         }
         String actualHash = Sha256Util.hashHex(bytes);
         if (!actualHash.equalsIgnoreCase(request.contentHashSha256())) {
-            throw AppException.validationFailed(Map.of(
-                    "field", "contentHashSha256",
-                    "message", "Computed hash does not match declared hash"));
+            throw new AppException(ErrorCode.RECOVERY_CERT_HASH_MISMATCH,
+                    "Computed " + actualHash + " does not match declared " + request.contentHashSha256());
         }
         return bytes;
     }

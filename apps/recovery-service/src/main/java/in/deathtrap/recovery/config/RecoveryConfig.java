@@ -10,6 +10,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient;
 import software.amazon.awssdk.services.secretsmanager.model.GetSecretValueRequest;
+import software.amazon.awssdk.services.ses.SesClient;
 
 /** Wires recovery-service-specific beans. */
 @Configuration
@@ -55,6 +56,13 @@ public class RecoveryConfig {
     @Bean
     public ActionLinkTokenService actionLinkTokenService(String jwtSigningSecret) {
         return new ActionLinkTokenService(jwtSigningSecret);
+    }
+
+    /** AWS SES client used by the confirmation-flow fan-out service. */
+    @Bean
+    public SesClient sesClient() {
+        String region = System.getenv().getOrDefault("AWS_REGION", "ap-south-1");
+        return SesClient.builder().region(Region.of(region)).build();
     }
 
     /** Creates the TransactionTemplate bean used by DbClient. */
