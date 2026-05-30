@@ -12,6 +12,8 @@ import in.deathtrap.common.types.enums.AuditEventType;
 import in.deathtrap.common.types.enums.AuditResult;
 import in.deathtrap.common.types.enums.PartyType;
 import in.deathtrap.locker.config.JwtService;
+import in.deathtrap.notification.ActionLinkTokenService;
+import in.deathtrap.notification.NotificationSenderService;
 import jakarta.validation.Valid;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -29,6 +31,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /** E011 Phase 1B — Family Vault closure flow endpoints.
@@ -123,11 +126,17 @@ public class FamilyVaultClosureHandler {
     private final DbClient dbClient;
     private final JwtService jwtService;
     private final AuditWriter auditWriter;
+    private final NotificationSenderService notificationSender;
+    private final ActionLinkTokenService actionLinkTokenService;
 
-    public FamilyVaultClosureHandler(DbClient dbClient, JwtService jwtService, AuditWriter auditWriter) {
+    public FamilyVaultClosureHandler(DbClient dbClient, JwtService jwtService, AuditWriter auditWriter,
+            NotificationSenderService notificationSender,
+            ActionLinkTokenService actionLinkTokenService) {
         this.dbClient = dbClient;
         this.jwtService = jwtService;
         this.auditWriter = auditWriter;
+        this.notificationSender = notificationSender;
+        this.actionLinkTokenService = actionLinkTokenService;
     }
 
     /** GET /locker/family-vault/closure/status — creator or nominee. */
@@ -195,15 +204,27 @@ public class FamilyVaultClosureHandler {
         return ResponseEntity.ok(ApiResponse.ok(new ClosureStatusResponse(summary), UUID.randomUUID().toString()));
     }
 
-    /** POST /locker/family-vault/closure/{closureId}/object — creator objects to closure. */
+    /** POST /locker/family-vault/closure/{closureId}/object — creator objects to closure.
+     *  Optional ?token=<jwt> is the §9.1 / §9.5 email link token. When present, it is
+     *  verified as an ADDITIONAL check on top of the session JWT (defence-in-depth per
+     *  E011 Phase 1C §8). Absent token = session-JWT-only path (unchanged from Phase 1B). */
     @PostMapping("/{closureId}/object")
     public ResponseEntity<ApiResponse<ObjectResponse>> objectClosure(
             @PathVariable String closureId,
+            @RequestParam(value = "token", required = false) String linkToken,
             @RequestBody(required = false) @Valid ObjectionRequest body,
             @RequestHeader("Authorization") String authHeader) {
 
         JwtPayload jwt = validateCreatorJwt(authHeader);
         String partyId = jwt.sub();
+
+        // §8 — if the caller presented a closure-object link token, verify it against
+        // the path closureId. Failure throws FAMILY_VAULT_CLOSURE_TOKEN_INVALID (401).
+        boolean verifiedViaActionLink = false;
+        if (linkToken != null && !linkToken.isBlank()) {
+            actionLinkTokenService.verifyClosureOrThrow(linkToken, closureId);
+            verifiedViaActionLink = true;
+        }
 
         ClosureRow closure = dbClient.queryOne(SELECT_CLOSURE_BY_ID, CLOSURE_ROW_MAPPER, closureId)
                 .orElseThrow(() -> new AppException(ErrorCode.FAMILY_VAULT_CLOSURE_NOT_FOUND,
@@ -252,11 +273,22 @@ public class FamilyVaultClosureHandler {
                 .metadataJson(Map.of(
                         "closureId", closureId,
                         "creatorId", closure.creatorId,
-                        "cancelledReason", reason != null ? reason : ""))
+                        "cancelledReason", reason != null ? reason : "",
+                        "verifiedViaActionLink", verifiedViaActionLink))
                 .build());
 
         log.info("Family vault closure cancelled: closureId={} creatorId={} reason={}",
                 closureId, closure.creatorId, reason);
+
+        // §5 — fan-out to creator (confirmation) + active-wrap nominees. Best-effort.
+        notificationSender.fanOutClosureCancelled(closure.creatorId, closureId, reason);
+        auditWriter.write(AuditWritePayload
+                .builder(AuditEventType.FAMILY_VAULT_CLOSURE_CANCELLED_FANOUT, AuditResult.SUCCESS)
+                .actorType(PartyType.SYSTEM).targetId(closureId)
+                .metadataJson(Map.of(
+                        "closureId", closureId,
+                        "creatorId", closure.creatorId))
+                .build());
 
         return ResponseEntity.ok(ApiResponse.ok(
                 new ObjectResponse(closureId, "cancelled", cancelledAt, true),

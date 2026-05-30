@@ -9,6 +9,8 @@ dependencies {
     implementation(project(":packages:common-db"))
     implementation(project(":packages:common-crypto"))
     implementation(project(":packages:common-audit"))
+    implementation(project(":packages:notification-sender"))
+    implementation("software.amazon.awssdk:ses:2.26.31")
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-data-jdbc")

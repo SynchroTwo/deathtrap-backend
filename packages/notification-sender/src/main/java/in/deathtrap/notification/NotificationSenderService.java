@@ -563,5 +563,131 @@ public class NotificationSenderService {
         };
     }
 
+    /** E011 Phase 1C §9.2 — creator objected, closure cancelled.
+     *  Fans out to: creator (confirmation) + each active-wrap nominee. */
+    public void fanOutClosureCancelled(String creatorId, String closureId, String cancellationReason) {
+        if (!notificationsEnabled) {
+            log.info("Notifications disabled; skipping closure-cancelled fan-out closureId={}", closureId);
+            return;
+        }
+        String creatorName = lookupName(creatorId);
+        String reasonBlock = (cancellationReason != null && !cancellationReason.isBlank())
+                ? "\n> \"" + sanitiseReason(cancellationReason) + "\"\n\n"
+                : "\n";
+
+        // §9.2a — creator confirmation.
+        try {
+            Optional<Recipient> creator = dbClient.queryOne(SELECT_USER, RECIPIENT_MAPPER, creatorId);
+            if (creator.isPresent()) {
+                String body = "Hi " + nullToEmpty(creator.get().fullName) + ",\n\n"
+                        + "Your objection has been recorded. The closure window for your DeathTrap "
+                        + "locker is now cancelled.\n\n"
+                        + "- Writes have been restored. You can add or change entries again immediately.\n"
+                        + "- Your nominees have been notified of the cancellation."
+                        + reasonBlock
+                        + "If you're seeing closures triggered by independent death-cert uploads while "
+                        + "you're still alive, that means your nominees believe you've passed — please "
+                        + "reach out to them so they can update their records.\n";
+                sendEmail(creator.get().email,
+                        "Closure cancelled — " + creatorName + "'s locker",
+                        body, closureId, "creator/closure_cancelled");
+            }
+        } catch (Exception ex) {
+            log.error("Closure-cancelled creator fan-out failed: closureId={} err={}",
+                    closureId, ex.getMessage());
+        }
+
+        // §9.2b — active-wrap nominees.
+        try {
+            for (Recipient n : dbClient.query(SELECT_ACTIVE_WRAP_NOMINEES, RECIPIENT_MAPPER, creatorId)) {
+                try {
+                    String body = "Hi " + nullToEmpty(n.fullName) + ",\n\n"
+                            + "The closure window for " + creatorName + "'s locker has been cancelled. "
+                            + creatorName + " objected during the 30-day window."
+                            + reasonBlock
+                            + "Your read access to the locker continues as before. Writes are restored "
+                            + "on " + creatorName + "'s side. If you uploaded a death certificate as part "
+                            + "of triggering this closure and the cancellation surprises you, please verify "
+                            + "with " + creatorName + " directly.\n";
+                    sendEmail(n.email,
+                            "Closure cancelled — " + creatorName + "'s locker",
+                            body, closureId, "nominee/closure_cancelled");
+                } catch (Exception ex) {
+                    log.error("Closure-cancelled nominee fan-out failed: closureId={} partyId={} err={}",
+                            closureId, n.partyId, ex.getMessage());
+                }
+            }
+        } catch (Exception ex) {
+            log.error("Closure-cancelled nominee list fan-out failed: closureId={} err={}",
+                    closureId, ex.getMessage());
+        }
+    }
+
+    /** E011 Phase 1C §9.4 — 7-day export-listing reminder to a single nominee
+     *  who hasn't acknowledged fetching their export yet. Worker loops over
+     *  matching nominees and calls this per-nominee. */
+    public void fanOutClosureExportReminder(String creatorId, String closureId, String nomineePartyId) {
+        if (!notificationsEnabled) {
+            return;
+        }
+        try {
+            String creatorName = lookupName(creatorId);
+            Optional<Recipient> nomineeOpt = dbClient.queryOne(SELECT_USER, RECIPIENT_MAPPER, nomineePartyId);
+            if (nomineeOpt.isEmpty()) {
+                log.warn("Export reminder skipped — nominee not found: partyId={}", nomineePartyId);
+                return;
+            }
+            Recipient nominee = nomineeOpt.get();
+            String exportUrl = frontendOrigin + "/nominee/closure/" + closureId + "/export";
+            String body = "Hi " + nullToEmpty(nominee.fullName) + ",\n\n"
+                    + "One week ago we wrote to let you know that " + creatorName + "'s locker "
+                    + "had been archived and your export was ready. Our records show you haven't "
+                    + "opened it yet.\n\n"
+                    + "View your export:\n" + exportUrl + "\n\n"
+                    + "The locker stays accessible to you indefinitely, so there's no rush. We just "
+                    + "wanted to make sure the earlier email reached you.\n";
+            sendEmail(nominee.email,
+                    "Reminder — your export from " + creatorName + "'s locker is waiting",
+                    body, closureId, "nominee/closure_export_reminder");
+        } catch (Exception ex) {
+            log.error("Export reminder fan-out failed: closureId={} partyId={} err={}",
+                    closureId, nomineePartyId, ex.getMessage());
+        }
+    }
+
+    /** E011 Phase 1C §9.5 — 72-hour objection reminder to the creator. Token is refreshed
+     *  by the caller (worker mints a fresh 7-day mintClosure token); this method receives
+     *  it ready-to-embed in the action URL. */
+    public void fanOutClosure72hReminder(String creatorId, String closureId, String freshToken,
+            String triggerKind, Instant objectionWindowEndsAt) {
+        if (!notificationsEnabled) {
+            return;
+        }
+        try {
+            Optional<Recipient> creatorOpt = dbClient.queryOne(SELECT_USER, RECIPIENT_MAPPER, creatorId);
+            if (creatorOpt.isEmpty()) {
+                log.warn("72h reminder skipped — creator not found: creatorId={}", creatorId);
+                return;
+            }
+            Recipient creator = creatorOpt.get();
+            String objectUrl = closureObjectLink(closureId, freshToken);
+            String triggerLabel = humanTriggerLabel(triggerKind);
+            String windowEndsHuman = HUMAN_DATE.format(objectionWindowEndsAt);
+            String body = "Hi " + nullToEmpty(creator.fullName) + ",\n\n"
+                    + "The 30-day closure window for your DeathTrap locker closes in 72 hours. "
+                    + "If you don't object before then, the locker will be archived and your nominees "
+                    + "will be sent their exports.\n\n"
+                    + "Object — I'm here and this is a mistake:\n" + objectUrl + "\n\n"
+                    + "Trigger: " + triggerLabel + ".\n"
+                    + "Window closes: " + windowEndsHuman + ".\n";
+            sendEmail(creator.email,
+                    "72 hours left to object — closure window for your locker",
+                    body, closureId, "creator/closure_72h_reminder");
+        } catch (Exception ex) {
+            log.error("72h reminder fan-out failed: closureId={} err={}",
+                    closureId, ex.getMessage());
+        }
+    }
+
     private record Recipient(String partyId, String fullName, String email) {}
 }

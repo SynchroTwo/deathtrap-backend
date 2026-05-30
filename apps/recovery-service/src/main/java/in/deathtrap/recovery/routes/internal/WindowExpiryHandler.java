@@ -9,9 +9,11 @@ import in.deathtrap.common.types.api.ApiResponse;
 import in.deathtrap.common.types.enums.AuditEventType;
 import in.deathtrap.common.types.enums.AuditResult;
 import in.deathtrap.common.types.enums.PartyType;
+import in.deathtrap.notification.ActionLinkTokenService;
 import in.deathtrap.notification.NotificationSenderService;
 import java.security.MessageDigest;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -69,8 +71,40 @@ public class WindowExpiryHandler {
             "SELECT closure_id, creator_id, objection_window_ends_at FROM account_closure " +
             "WHERE status = 'pending_objection' AND objection_window_ends_at <= NOW()";
     private static final String UPDATE_CLOSURE_FINALISING =
-            "UPDATE account_closure SET status = 'finalising' " +
+            "UPDATE account_closure SET status = 'finalising', finalised_at = NOW() " +
             "WHERE closure_id = ? AND status = 'pending_objection'";
+
+    // E011 Phase 1C §6.2 — 72h objection reminder.
+    private static final String SELECT_CLOSURES_DUE_72H_REMINDER =
+            "SELECT closure_id, creator_id, trigger_kind::text AS trigger_kind, objection_window_ends_at " +
+            "FROM account_closure WHERE status = 'pending_objection' " +
+            "AND objection_window_ends_at > NOW() " +
+            "AND objection_window_ends_at <= NOW() + INTERVAL '72 hours' " +
+            "AND reminder_72h_sent_at IS NULL";
+    private static final String UPDATE_CLOSURE_72H_REMINDER_SENT =
+            "UPDATE account_closure SET reminder_72h_sent_at = NOW() " +
+            "WHERE closure_id = ? AND reminder_72h_sent_at IS NULL";
+
+    // E011 Phase 1C §6.1 — 7d-post-finalise export-listing reminder.
+    private static final String SELECT_CLOSURES_DUE_EXPORT_REMINDER =
+            "SELECT closure_id, creator_id FROM account_closure " +
+            "WHERE status = 'closed' " +
+            "AND finalised_at <= NOW() - INTERVAL '7 days' " +
+            "AND export_reminder_sent_at IS NULL " +
+            "AND EXISTS (SELECT 1 FROM family_vault_wraps fvw " +
+            "            WHERE fvw.creator_id = account_closure.creator_id " +
+            "              AND fvw.status = 'active' " +
+            "              AND NOT EXISTS (SELECT 1 FROM closure_export_acknowledgement cea " +
+            "                              WHERE cea.closure_id = account_closure.closure_id " +
+            "                                AND cea.recipient_party_id = fvw.nominee_party_id))";
+    private static final String SELECT_UNACKED_NOMINEES_FOR_CLOSURE =
+            "SELECT fvw.nominee_party_id FROM family_vault_wraps fvw " +
+            "WHERE fvw.creator_id = ? AND fvw.status = 'active' " +
+            "AND NOT EXISTS (SELECT 1 FROM closure_export_acknowledgement cea " +
+            "                WHERE cea.closure_id = ? AND cea.recipient_party_id = fvw.nominee_party_id)";
+    private static final String UPDATE_CLOSURE_EXPORT_REMINDER_SENT =
+            "UPDATE account_closure SET export_reminder_sent_at = NOW() " +
+            "WHERE closure_id = ? AND export_reminder_sent_at IS NULL";
 
     private static final RowMapper<PendingWindow> PENDING_MAPPER = (rs, row) -> new PendingWindow(
             rs.getString("window_id"),
@@ -85,19 +119,31 @@ public class WindowExpiryHandler {
             rs.getString("closure_id"),
             rs.getString("creator_id"),
             rs.getTimestamp("objection_window_ends_at").toInstant());
+    private static final RowMapper<ClosureDue72hReminder> DUE_72H_MAPPER = (rs, row) -> new ClosureDue72hReminder(
+            rs.getString("closure_id"),
+            rs.getString("creator_id"),
+            rs.getString("trigger_kind"),
+            rs.getTimestamp("objection_window_ends_at").toInstant());
+    private static final RowMapper<ClosureDueExportReminder> DUE_EXPORT_MAPPER = (rs, row) -> new ClosureDueExportReminder(
+            rs.getString("closure_id"),
+            rs.getString("creator_id"));
+    private static final RowMapper<String> NOMINEE_ID_MAPPER = (rs, row) -> rs.getString("nominee_party_id");
 
     private final DbClient dbClient;
     private final AuditWriter auditWriter;
     private final NotificationSenderService notificationSender;
+    private final ActionLinkTokenService actionLinkTokenService;
 
     @Value("${INTERNAL_WORKER_SECRET:}")
     private String internalWorkerSecret;
 
     public WindowExpiryHandler(DbClient dbClient, AuditWriter auditWriter,
-            NotificationSenderService notificationSender) {
+            NotificationSenderService notificationSender,
+            ActionLinkTokenService actionLinkTokenService) {
         this.dbClient = dbClient;
         this.auditWriter = auditWriter;
         this.notificationSender = notificationSender;
+        this.actionLinkTokenService = actionLinkTokenService;
     }
 
     /** POST /recovery/internal/window-tick — process expiry transitions for pending windows. */
@@ -159,9 +205,15 @@ public class WindowExpiryHandler {
         // E011 Phase 1B §4.4 — closure window expiry leg. Independent of confirmation_window.
         int closuresFinalised = tickAccountClosures();
 
+        // E011 Phase 1C §6.1 + §6.2 — reminder legs. Each row's UPDATE-WHERE-NULL
+        // guarantees exactly-once delivery across concurrent ticks.
+        int reminders72h = tickClosure72hReminders();
+        int exportReminders = tickClosureExportReminders();
+
         String requestId = UUID.randomUUID().toString();
         return ResponseEntity.ok(ApiResponse.ok(
-                new TickResponse(pending.size(), confirmedCount, lawyerSilentCount, closuresFinalised),
+                new TickResponse(pending.size(), confirmedCount, lawyerSilentCount,
+                        closuresFinalised, reminders72h, exportReminders),
                 requestId));
     }
 
@@ -217,10 +269,75 @@ public class WindowExpiryHandler {
         }
     }
 
+    /** E011 Phase 1C §6.2 — fire 72h objection reminder to creators whose closure
+     *  is closing within 72h and hasn't been reminded yet. Mints a fresh 7-day token
+     *  per §11.3 LOCKED. UPDATE-WHERE-NULL provides exactly-once delivery. */
+    private int tickClosure72hReminders() {
+        List<ClosureDue72hReminder> due = dbClient.query(SELECT_CLOSURES_DUE_72H_REMINDER, DUE_72H_MAPPER);
+        int fired = 0;
+        for (ClosureDue72hReminder c : due) {
+            int updated = dbClient.execute(UPDATE_CLOSURE_72H_REMINDER_SENT, c.closureId);
+            if (updated == 1) {
+                fired++;
+                String freshToken = actionLinkTokenService.mintClosure(c.creatorId, c.closureId, Duration.ofDays(7));
+                notificationSender.fanOutClosure72hReminder(c.creatorId, c.closureId, freshToken,
+                        c.triggerKind, c.objectionWindowEndsAt);
+                auditWriter.write(AuditWritePayload
+                        .builder(AuditEventType.FAMILY_VAULT_CLOSURE_REMINDER_72H_SENT, AuditResult.SUCCESS)
+                        .actorType(PartyType.SYSTEM).targetId(c.closureId)
+                        .metadataJson(Map.of(
+                                "closureId", c.closureId,
+                                "creatorId", c.creatorId,
+                                "objectionWindowEndsAt", c.objectionWindowEndsAt.toString()))
+                        .build());
+                log.info("72h closure reminder sent: closureId={} creatorId={}", c.closureId, c.creatorId);
+            }
+        }
+        return fired;
+    }
+
+    /** E011 Phase 1C §6.1 — fire export-listing reminder to active-wrap nominees
+     *  7 days post-finalise who haven't acknowledged fetching their export. One
+     *  email per unacked nominee; closure-level timestamp ensures the reminder
+     *  fires at most once per closure (per-nominee timestamping deferred — see
+     *  Phase 2 polish note in contract §6.1). */
+    private int tickClosureExportReminders() {
+        List<ClosureDueExportReminder> due = dbClient.query(SELECT_CLOSURES_DUE_EXPORT_REMINDER, DUE_EXPORT_MAPPER);
+        int fired = 0;
+        for (ClosureDueExportReminder c : due) {
+            int updated = dbClient.execute(UPDATE_CLOSURE_EXPORT_REMINDER_SENT, c.closureId);
+            if (updated == 1) {
+                fired++;
+                List<String> unackedNominees = dbClient.query(
+                        SELECT_UNACKED_NOMINEES_FOR_CLOSURE, NOMINEE_ID_MAPPER, c.creatorId, c.closureId);
+                for (String nomineeId : unackedNominees) {
+                    notificationSender.fanOutClosureExportReminder(c.creatorId, c.closureId, nomineeId);
+                }
+                auditWriter.write(AuditWritePayload
+                        .builder(AuditEventType.FAMILY_VAULT_CLOSURE_EXPORT_REMINDER_SENT, AuditResult.SUCCESS)
+                        .actorType(PartyType.SYSTEM).targetId(c.closureId)
+                        .metadataJson(Map.of(
+                                "closureId", c.closureId,
+                                "creatorId", c.creatorId,
+                                "nomineesReminded", unackedNominees.size()))
+                        .build());
+                log.info("Export reminder sent: closureId={} creatorId={} nominees={}",
+                        c.closureId, c.creatorId, unackedNominees.size());
+            }
+        }
+        return fired;
+    }
+
     private record PendingWindow(String windowId, String creatorId, int windowHours,
             Instant expiresAt, Instant lawyerExpiresAt, boolean lawyerDesignated) {}
 
     private record ExpiredClosure(String closureId, String creatorId, Instant objectionWindowEndsAt) {}
 
-    private record TickResponse(int candidates, int confirmed, int lawyerSilent, int closuresFinalised) {}
+    private record ClosureDue72hReminder(String closureId, String creatorId, String triggerKind,
+            Instant objectionWindowEndsAt) {}
+
+    private record ClosureDueExportReminder(String closureId, String creatorId) {}
+
+    private record TickResponse(int candidates, int confirmed, int lawyerSilent, int closuresFinalised,
+            int reminders72h, int exportReminders) {}
 }
