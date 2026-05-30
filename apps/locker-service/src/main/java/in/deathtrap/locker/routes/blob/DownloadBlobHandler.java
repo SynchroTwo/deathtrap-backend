@@ -66,6 +66,19 @@ public class DownloadBlobHandler {
             "AND n.status = 'active'::nominee_status_enum LIMIT 1";
     private static final String SELECT_REVOKED_WRAP_EXISTS =
             "SELECT 1 FROM family_vault_wraps WHERE nominee_party_id = ? AND creator_id = ? AND status = 'revoked' LIMIT 1";
+    // E011 Phase 1C §10.1 — always-on access log on nominee Family Vault reads.
+    // The toggle (locker_meta.notify_on_nominee_access) gates fan-out only;
+    // the log itself runs regardless so the §10.4 recent-access summary stays
+    // accurate even when the creator hasn't opted in to notifications.
+    private static final String UPSERT_ACCESS_LOG =
+            "INSERT INTO creator_access_notification_log " +
+            "(creator_id, nominee_party_id, pending_count, first_pending_at, last_access_at) " +
+            "VALUES (?, ?, 1, NOW(), NOW()) " +
+            "ON CONFLICT (creator_id, nominee_party_id) DO UPDATE " +
+            "SET pending_count = creator_access_notification_log.pending_count + 1, " +
+            "    first_pending_at = COALESCE(creator_access_notification_log.first_pending_at, NOW()), " +
+            "    last_access_at = NOW()";
+
     // E011 Phase 1C §7.2 — post-finalise read-path branch. When the closure is closed,
     // the archive copy is complete, and the 7d live-bucket grace has elapsed, reads
     // are served from the archive prefix instead. Prior to the 7d grace, the live
@@ -136,6 +149,20 @@ public class DownloadBlobHandler {
         BlobVersion blob = blobRows.get(0);
 
         String downloadUrl = buildPresignedUrl(blob);
+
+        // §10.1 — log Family Vault nominee accesses always (toggle gates fan-out only).
+        if (partyType == PartyType.NOMINEE && resolution.viaWrapId() != null) {
+            String creatorForLog = dbClient.queryOne(SELECT_CREATOR_FOR_LOCKER, STRING_MAPPER, lockerId)
+                    .orElse(null);
+            if (creatorForLog != null) {
+                try {
+                    dbClient.execute(UPSERT_ACCESS_LOG, creatorForLog, partyId);
+                } catch (Exception ex) {
+                    log.warn("Access-log upsert failed: creatorId={} nomineeId={} err={}",
+                            creatorForLog, partyId, ex.getMessage());
+                }
+            }
+        }
 
         AuditWritePayload.Builder auditBuilder = AuditWritePayload
                 .builder(AuditEventType.BLOB_ACCESSED, AuditResult.SUCCESS)

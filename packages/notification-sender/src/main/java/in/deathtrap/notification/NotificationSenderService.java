@@ -689,5 +689,39 @@ public class NotificationSenderService {
         }
     }
 
+    /** E011 Phase 1C §10.5a — hourly batched access notification to the creator.
+     *  Caller is the worker tick that finds (creator, nominee) rows with
+     *  pending_count > 0 + creator opted-in + last_notified_at older than 1h. */
+    public void fanOutAccessNotification(String creatorId, String nomineePartyId,
+            int accessCount, Instant lastAccessAt) {
+        if (!notificationsEnabled) {
+            return;
+        }
+        try {
+            Optional<Recipient> creatorOpt = dbClient.queryOne(SELECT_USER, RECIPIENT_MAPPER, creatorId);
+            if (creatorOpt.isEmpty()) {
+                log.warn("Access notification skipped — creator not found: creatorId={}", creatorId);
+                return;
+            }
+            Recipient creator = creatorOpt.get();
+            String nomineeName = dbClient.queryOne(SELECT_USER, RECIPIENT_MAPPER, nomineePartyId)
+                    .map(r -> r.fullName).orElse("A nominee");
+            String when = lastAccessAt != null ? HUMAN_DATE.format(lastAccessAt) : "recently";
+            String body = "Hi " + nullToEmpty(creator.fullName) + ",\n\n"
+                    + nomineeName + " accessed your DeathTrap locker " + accessCount
+                    + (accessCount == 1 ? " time" : " times") + " in the last hour "
+                    + "(most recent at " + when + ").\n\n"
+                    + "You're receiving this because you've opted in to access notifications. "
+                    + "If this looks unexpected, you can review who has access in your dashboard "
+                    + "or disable these notifications at any time.\n";
+            sendEmail(creator.email,
+                    nomineeName + " accessed your locker",
+                    body, nomineePartyId, "creator/access_notification");
+        } catch (Exception ex) {
+            log.error("Access notification fan-out failed: creatorId={} nomineeId={} err={}",
+                    creatorId, nomineePartyId, ex.getMessage());
+        }
+    }
+
     private record Recipient(String partyId, String fullName, String email) {}
 }

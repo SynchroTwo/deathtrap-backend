@@ -92,6 +92,22 @@ public class WindowExpiryHandler {
             "UPDATE account_closure SET reminder_72h_sent_at = NOW() " +
             "WHERE closure_id = ? AND reminder_72h_sent_at IS NULL";
 
+    // E011 Phase 1C §10 — hourly batched access notifications. Throttle via
+    // last_notified_at so the every-1-min worker only fires fan-out once per
+    // (creator, nominee) per hour. Toggle is on locker_meta.notify_on_nominee_access;
+    // logging is always-on (see DownloadBlobHandler) so this query gates fan-out only.
+    private static final String SELECT_PENDING_ACCESS_NOTIFICATIONS =
+            "SELECT can.creator_id, can.nominee_party_id, can.pending_count, can.last_access_at " +
+            "FROM creator_access_notification_log can " +
+            "JOIN locker_meta lm ON lm.user_id = can.creator_id " +
+            "WHERE can.pending_count > 0 " +
+            "AND lm.notify_on_nominee_access = TRUE " +
+            "AND (can.last_notified_at IS NULL OR can.last_notified_at <= NOW() - INTERVAL '1 hour')";
+    private static final String UPDATE_ACCESS_NOTIFICATION_SENT =
+            "UPDATE creator_access_notification_log " +
+            "SET pending_count = 0, first_pending_at = NULL, last_notified_at = NOW() " +
+            "WHERE creator_id = ? AND nominee_party_id = ? AND pending_count > 0";
+
     // E011 Phase 1C §7 — archive flow. Finalising closures pending archive copy.
     private static final String SELECT_FINALISING_CLOSURES_TO_ARCHIVE =
             "SELECT closure_id, creator_id FROM account_closure " +
@@ -154,6 +170,13 @@ public class WindowExpiryHandler {
     private static final RowMapper<LiveBlob> LIVE_BLOB_MAPPER = (rs, row) -> new LiveBlob(
             rs.getString("blob_id"),
             rs.getString("s3_key"));
+    private static final RowMapper<PendingAccessNotification> ACCESS_NOTIFY_MAPPER = (rs, row) ->
+            new PendingAccessNotification(
+                    rs.getString("creator_id"),
+                    rs.getString("nominee_party_id"),
+                    rs.getInt("pending_count"),
+                    rs.getTimestamp("last_access_at") != null
+                            ? rs.getTimestamp("last_access_at").toInstant() : null);
 
     private final DbClient dbClient;
     private final AuditWriter auditWriter;
@@ -246,10 +269,16 @@ public class WindowExpiryHandler {
         // GLACIER_IR copy of every current blob into the archive prefix.
         int closuresArchived = tickClosureArchive();
 
+        // E011 Phase 1C §10 — hourly batched access-notification fan-out.
+        // Per-row throttle: only (creator, nominee) pairs whose last_notified_at
+        // is null or older than 1h get a fresh notification this tick.
+        int accessNotificationsBatched = tickAccessNotifications();
+
         String requestId = UUID.randomUUID().toString();
         return ResponseEntity.ok(ApiResponse.ok(
                 new TickResponse(pending.size(), confirmedCount, lawyerSilentCount,
-                        closuresFinalised, reminders72h, exportReminders, closuresArchived),
+                        closuresFinalised, reminders72h, exportReminders, closuresArchived,
+                        accessNotificationsBatched),
                 requestId));
     }
 
@@ -428,6 +457,36 @@ public class WindowExpiryHandler {
         return archived;
     }
 
+    /** E011 Phase 1C §10 — hourly batched access notifications. Selects (creator,
+     *  nominee) pairs with pending events whose creator opted in, throttled by
+     *  last_notified_at >= 1h. Each row's UPDATE-WHERE-pending_count>0 idempotently
+     *  resets the counter and stamps last_notified_at. */
+    private int tickAccessNotifications() {
+        List<PendingAccessNotification> pending = dbClient.query(
+                SELECT_PENDING_ACCESS_NOTIFICATIONS, ACCESS_NOTIFY_MAPPER);
+        int fired = 0;
+        for (PendingAccessNotification p : pending) {
+            int updated = dbClient.execute(UPDATE_ACCESS_NOTIFICATION_SENT,
+                    p.creatorId, p.nomineePartyId);
+            if (updated == 1) {
+                fired++;
+                notificationSender.fanOutAccessNotification(
+                        p.creatorId, p.nomineePartyId, p.pendingCount, p.lastAccessAt);
+                auditWriter.write(AuditWritePayload
+                        .builder(AuditEventType.FAMILY_VAULT_ACCESS_NOTIFICATION_BATCHED, AuditResult.SUCCESS)
+                        .actorType(PartyType.SYSTEM).targetId(p.creatorId)
+                        .metadataJson(Map.of(
+                                "creatorId", p.creatorId,
+                                "nomineePartyId", p.nomineePartyId,
+                                "accessCount", p.pendingCount))
+                        .build());
+                log.info("Access notification batched: creatorId={} nomineeId={} count={}",
+                        p.creatorId, p.nomineePartyId, p.pendingCount);
+            }
+        }
+        return fired;
+    }
+
     private record PendingWindow(String windowId, String creatorId, int windowHours,
             Instant expiresAt, Instant lawyerExpiresAt, boolean lawyerDesignated) {}
 
@@ -442,6 +501,10 @@ public class WindowExpiryHandler {
 
     private record LiveBlob(String blobId, String s3Key) {}
 
+    private record PendingAccessNotification(String creatorId, String nomineePartyId,
+            int pendingCount, Instant lastAccessAt) {}
+
     private record TickResponse(int candidates, int confirmed, int lawyerSilent, int closuresFinalised,
-            int reminders72h, int exportReminders, int closuresArchived) {}
+            int reminders72h, int exportReminders, int closuresArchived,
+            int accessNotificationsBatched) {}
 }
