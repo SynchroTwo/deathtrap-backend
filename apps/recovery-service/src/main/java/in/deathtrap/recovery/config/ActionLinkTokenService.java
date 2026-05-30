@@ -23,8 +23,10 @@ public class ActionLinkTokenService {
     private static final Logger log = LoggerFactory.getLogger(ActionLinkTokenService.class);
     private static final String CLAIM_PARTY_TYPE = "partyType";
     private static final String CLAIM_WINDOW_ID = "windowId";
+    private static final String CLAIM_CLOSURE_ID = "closureId";
     private static final String CLAIM_TOKEN_TYPE = "tokenType";
     private static final String TOKEN_TYPE_ACTION_LINK = "action-link";
+    private static final String TOKEN_TYPE_CLOSURE_OBJECT = "closure-object";
 
     private final SecretKey signingKey;
 
@@ -79,4 +81,20 @@ public class ActionLinkTokenService {
     }
 
     public record ActionLinkClaims(String partyId, PartyType partyType, String windowId) {}
+
+    /** Mints a 7-day closure-object link token (E011 Phase 1B §11.3). Bound to the
+     *  creator on a specific closure_id. Refreshed on the 72h reminder. */
+    public String mintClosure(String creatorId, String closureId, Duration ttl) {
+        Instant now = Instant.now();
+        return Jwts.builder()
+                .subject(creatorId)
+                .id(closureId + ":" + creatorId)
+                .claim(CLAIM_PARTY_TYPE, PartyType.CREATOR.name())
+                .claim(CLAIM_CLOSURE_ID, closureId)
+                .claim(CLAIM_TOKEN_TYPE, TOKEN_TYPE_CLOSURE_OBJECT)
+                .issuedAt(Date.from(now))
+                .expiration(Date.from(now.plus(ttl)))
+                .signWith(signingKey)
+                .compact();
+    }
 }

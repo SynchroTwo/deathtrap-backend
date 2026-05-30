@@ -64,6 +64,13 @@ public class WindowExpiryHandler {
     private static final String UPDATE_AUTOCONFIRM =
             "UPDATE confirmation_window SET status = 'confirmed', resolution_at = NOW() " +
             "WHERE window_id = ? AND status = 'pending'";
+    // E011 Phase 1B §4.4 — closure window expiry leg.
+    private static final String SELECT_EXPIRED_CLOSURES =
+            "SELECT closure_id, creator_id, objection_window_ends_at FROM account_closure " +
+            "WHERE status = 'pending_objection' AND objection_window_ends_at <= NOW()";
+    private static final String UPDATE_CLOSURE_FINALISING =
+            "UPDATE account_closure SET status = 'finalising' " +
+            "WHERE closure_id = ? AND status = 'pending_objection'";
 
     private static final RowMapper<PendingWindow> PENDING_MAPPER = (rs, row) -> new PendingWindow(
             rs.getString("window_id"),
@@ -74,6 +81,10 @@ public class WindowExpiryHandler {
                     ? rs.getTimestamp("lawyer_expires_at").toInstant() : null,
             rs.getBoolean("lawyer_designated"));
     private static final RowMapper<Integer> INT_MAPPER = (rs, row) -> rs.getInt(1);
+    private static final RowMapper<ExpiredClosure> EXPIRED_CLOSURE_MAPPER = (rs, row) -> new ExpiredClosure(
+            rs.getString("closure_id"),
+            rs.getString("creator_id"),
+            rs.getTimestamp("objection_window_ends_at").toInstant());
 
     private final DbClient dbClient;
     private final AuditWriter auditWriter;
@@ -145,10 +156,46 @@ public class WindowExpiryHandler {
             }
         }
 
+        // E011 Phase 1B §4.4 — closure window expiry leg. Independent of confirmation_window.
+        int closuresFinalised = tickAccountClosures();
+
         String requestId = UUID.randomUUID().toString();
         return ResponseEntity.ok(ApiResponse.ok(
-                new TickResponse(pending.size(), confirmedCount, lawyerSilentCount),
+                new TickResponse(pending.size(), confirmedCount, lawyerSilentCount, closuresFinalised),
                 requestId));
+    }
+
+    /** Flips expired pending_objection closures to finalising and fires §9.3 fan-out.
+     *  Idempotent — UPDATE WHERE status='pending_objection' guarantees one-shot transition. */
+    private int tickAccountClosures() {
+        List<ExpiredClosure> expired = dbClient.query(SELECT_EXPIRED_CLOSURES, EXPIRED_CLOSURE_MAPPER);
+        int finalised = 0;
+        for (ExpiredClosure c : expired) {
+            int updated = dbClient.execute(UPDATE_CLOSURE_FINALISING, c.closureId);
+            if (updated == 1) {
+                finalised++;
+                auditWriter.write(AuditWritePayload
+                        .builder(AuditEventType.FAMILY_VAULT_CLOSURE_WINDOW_EXPIRED, AuditResult.SUCCESS)
+                        .actorType(PartyType.SYSTEM).targetId(c.closureId)
+                        .metadataJson(Map.of(
+                                "closureId", c.closureId,
+                                "creatorId", c.creatorId,
+                                "objectionWindowEndsAt", c.objectionWindowEndsAt.toString()))
+                        .build());
+                auditWriter.write(AuditWritePayload
+                        .builder(AuditEventType.FAMILY_VAULT_CLOSURE_FINALISED, AuditResult.SUCCESS)
+                        .actorType(PartyType.SYSTEM).targetId(c.closureId)
+                        .metadataJson(Map.of(
+                                "closureId", c.closureId,
+                                "creatorId", c.creatorId,
+                                "trigger", "window_expired_no_objection"))
+                        .build());
+                log.info("Account closure finalised: closureId={} creatorId={}",
+                        c.closureId, c.creatorId);
+                notificationSender.fanOutClosureFinalised(c.creatorId, c.closureId);
+            }
+        }
+        return finalised;
     }
 
     private boolean hasLawyerConfirmed(String windowId) {
@@ -173,5 +220,7 @@ public class WindowExpiryHandler {
     private record PendingWindow(String windowId, String creatorId, int windowHours,
             Instant expiresAt, Instant lawyerExpiresAt, boolean lawyerDesignated) {}
 
-    private record TickResponse(int candidates, int confirmed, int lawyerSilent) {}
+    private record ExpiredClosure(String closureId, String creatorId, Instant objectionWindowEndsAt) {}
+
+    private record TickResponse(int candidates, int confirmed, int lawyerSilent, int closuresFinalised) {}
 }

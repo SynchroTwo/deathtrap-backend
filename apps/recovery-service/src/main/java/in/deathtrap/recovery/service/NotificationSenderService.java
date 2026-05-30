@@ -55,6 +55,10 @@ public class NotificationSenderService {
             "JOIN users u ON u.user_id = l.lawyer_id " +
             "WHERE lm.user_id = ? AND lm.assigned_lawyer_id IS NOT NULL " +
             "AND l.status = 'active'::lawyer_status_enum LIMIT 1";
+    private static final String SELECT_ACTIVE_WRAP_NOMINEES =
+            "SELECT u.user_id, u.full_name, u.email " +
+            "FROM family_vault_wraps fvw JOIN users u ON u.user_id = fvw.nominee_party_id " +
+            "WHERE fvw.creator_id = ? AND fvw.status = 'active'";
 
     private static final RowMapper<Recipient> RECIPIENT_MAPPER = (rs, row) -> new Recipient(
             rs.getString("user_id"),
@@ -422,6 +426,128 @@ public class NotificationSenderService {
     private static String sanitiseReason(String reason) {
         String trimmed = reason.replace("\r", " ").replace("\n", " ").trim();
         return trimmed.length() > 500 ? trimmed.substring(0, 500) + "…" : trimmed;
+    }
+
+    /** E011 Phase 1B §9.1 — account_closure opened (3-cert threshold or missed-payment).
+     *  Fans out to: creator (action link with mintClosure token) + each active-wrap nominee. */
+    public void fanOutClosureOpened(String creatorId, String closureId, String triggerKind,
+            String triggerSummary, Instant objectionWindowEndsAt) {
+        if (!notificationsEnabled) {
+            log.info("Notifications disabled; skipping closure-opened fan-out closureId={}", closureId);
+            return;
+        }
+        String triggerLabel = humanTriggerLabel(triggerKind);
+        String windowEndsHuman = HUMAN_DATE.format(objectionWindowEndsAt);
+
+        // Creator §9.1a — gets the object action link.
+        try {
+            Optional<Recipient> creator = dbClient.queryOne(SELECT_USER, RECIPIENT_MAPPER, creatorId);
+            if (creator.isPresent()) {
+                String token = tokenService.mintClosure(creatorId, closureId, Duration.ofDays(7));
+                String objectUrl = closureObjectLink(closureId, token);
+                String body = "Hi " + nullToEmpty(creator.get().fullName) + ",\n\n"
+                        + "A request to close your DeathTrap locker has been registered. This can happen "
+                        + "for one of two reasons:\n\n"
+                        + "- Three of your nominees have independently confirmed your passing. "
+                        + "You're receiving this email because we want to make absolutely sure they're right.\n"
+                        + "- A subscription payment has been missed past the grace period.\n\n"
+                        + "You have 30 days to object. If you do nothing, the locker will be archived and "
+                        + "your nominees will be sent their export.\n\n"
+                        + "Object — I'm here and this is a mistake:\n" + objectUrl + "\n\n"
+                        + "Reason for this closure: " + triggerLabel + ".\n"
+                        + (triggerSummary != null && !triggerSummary.isBlank()
+                                ? "Trigger details: " + sanitiseReason(triggerSummary) + ".\n\n" : "\n")
+                        + "Your data is still encrypted and unchanged. The objection link above simply "
+                        + "records that you're alive and well; recovery flow does not apply to Family Vault lockers.\n";
+                sendEmail(creator.get().email,
+                        "Action required — account closure window opened for your locker",
+                        body, closureId, "creator/closure_opened");
+            }
+        } catch (Exception ex) {
+            log.error("Closure-opened creator fan-out failed: closureId={} err={}", closureId, ex.getMessage());
+        }
+
+        // Active-wrap nominees §9.1b — informational, no action.
+        try {
+            String creatorName = lookupName(creatorId);
+            for (Recipient n : dbClient.query(SELECT_ACTIVE_WRAP_NOMINEES, RECIPIENT_MAPPER, creatorId)) {
+                try {
+                    String body = "Hi " + nullToEmpty(n.fullName) + ",\n\n"
+                            + creatorName + "'s DeathTrap locker has entered a 30-day closure window. "
+                            + "Closure may have been triggered by independent death-cert uploads or by a "
+                            + "missed subscription payment.\n\n"
+                            + "During the window, " + creatorName + " can object if they're still reachable. "
+                            + "If they don't, the locker will be archived on " + windowEndsHuman
+                            + " and you'll receive a notification with instructions to export your copy.\n\n"
+                            + "While the window is open:\n"
+                            + "- Your read access to the locker continues.\n"
+                            + "- No new entries can be added (writes are paused for everyone).\n\n"
+                            + "No action is required from you right now.\n";
+                    sendEmail(n.email, "Closure window opened — " + creatorName + "'s locker",
+                            body, closureId, "nominee/closure_opened");
+                } catch (Exception ex) {
+                    log.error("Closure-opened nominee fan-out failed: closureId={} partyId={} err={}",
+                            closureId, n.partyId, ex.getMessage());
+                }
+            }
+        } catch (Exception ex) {
+            log.error("Closure-opened nominee list fan-out failed: closureId={} err={}",
+                    closureId, ex.getMessage());
+        }
+    }
+
+    /** E011 Phase 1B §9.3 — closure finalised (30-day window expired without objection).
+     *  Fans out to each active-wrap nominee with the FE-side export-listing URL. */
+    public void fanOutClosureFinalised(String creatorId, String closureId) {
+        if (!notificationsEnabled) {
+            log.info("Notifications disabled; skipping closure-finalised fan-out closureId={}", closureId);
+            return;
+        }
+        try {
+            String creatorName = lookupName(creatorId);
+            String exportUrl = frontendOrigin + "/nominee/closure/" + closureId + "/export";
+
+            for (Recipient n : dbClient.query(SELECT_ACTIVE_WRAP_NOMINEES, RECIPIENT_MAPPER, creatorId)) {
+                try {
+                    String body = "Hi " + nullToEmpty(n.fullName) + ",\n\n"
+                            + "The 30-day closure window for " + creatorName + "'s locker has closed "
+                            + "without an objection. The locker is now archived, and your export is "
+                            + "ready to download.\n\n"
+                            + "View your export:\n" + exportUrl + "\n\n"
+                            + "What's in your export:\n"
+                            + "- Every category from " + creatorName + "'s locker, exactly as they last saved.\n"
+                            + "- An audit trail of when each entry was created and last edited.\n\n"
+                            + "Your export is prepared on this device when you click the link — we don't keep "
+                            + "an unencrypted copy on our servers. You can choose to download:\n"
+                            + "- An encrypted .fvpack file (only you can decrypt it).\n"
+                            + "- A plaintext PDF for printing or sharing.\n"
+                            + "- Plaintext JSON for programmatic use.\n\n"
+                            + "Your read access to the archived locker continues indefinitely. The export "
+                            + "above is just a convenience — you can return any time.\n";
+                    sendEmail(n.email,
+                            "Locker closed — your export is ready for " + creatorName,
+                            body, closureId, "nominee/closure_finalised");
+                } catch (Exception ex) {
+                    log.error("Closure-finalised nominee fan-out failed: closureId={} partyId={} err={}",
+                            closureId, n.partyId, ex.getMessage());
+                }
+            }
+        } catch (Exception ex) {
+            log.error("Closure-finalised fan-out failed: closureId={} err={}",
+                    closureId, ex.getMessage());
+        }
+    }
+
+    private String closureObjectLink(String closureId, String token) {
+        return frontendOrigin + "/flow/family-vault/closure-object/" + closureId + "?token=" + token;
+    }
+
+    private static String humanTriggerLabel(String triggerKind) {
+        return switch (triggerKind) {
+            case "three_cert_threshold" -> "three independent death-certificate uploads";
+            case "missed_payment_grace" -> "a missed subscription payment";
+            default -> triggerKind;
+        };
     }
 
     private record Recipient(String partyId, String fullName, String email) {}

@@ -319,7 +319,11 @@ public class UploadDeathCertHandler {
                     .build());
             log.info("Family vault closure opened: closureId={} creatorId={} triggeringCertId={}",
                     openedClosureId[0], creatorId, certId);
-            // §9.1 fan-out lands here once NotificationSenderService.fanOutClosureOpened is wired.
+            // §9.1 fan-out — creator (with object action-link) + active-wrap nominees.
+            Instant windowEndsAt = Instant.now().plus(java.time.Duration.ofDays(30));
+            String triggerSummary = "Triggering cert id: " + certId;
+            notificationSender.fanOutClosureOpened(creatorId, openedClosureId[0],
+                    "three_cert_threshold", triggerSummary, windowEndsAt);
         }
 
         log.info("Death cert uploaded (family_vault): certId={} creatorId={} uploader={} closureOpened={}",
