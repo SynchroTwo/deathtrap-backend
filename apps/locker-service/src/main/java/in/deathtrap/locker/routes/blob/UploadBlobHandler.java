@@ -14,6 +14,7 @@ import in.deathtrap.common.types.enums.PartyType;
 import in.deathtrap.locker.config.JwtService;
 import in.deathtrap.locker.rowmapper.AssetIndexRowMapper;
 import in.deathtrap.locker.rowmapper.AssetIndexRowMapper.AssetIndex;
+import in.deathtrap.locker.service.ClosureWriteGate;
 import in.deathtrap.locker.service.CompletenessCalculator;
 import in.deathtrap.locker.service.CompletenessCalculator.CompletenessScore;
 import jakarta.validation.Valid;
@@ -75,6 +76,7 @@ public class UploadBlobHandler {
     private final AuditWriter auditWriter;
     private final S3Client s3Client;
     private final CompletenessCalculator completenessCalculator;
+    private final ClosureWriteGate closureWriteGate;
 
     @Value("${S3_BUCKET_NAME:}")
     private String s3BucketName;
@@ -84,12 +86,14 @@ public class UploadBlobHandler {
 
     /** Constructs UploadBlobHandler with required dependencies. */
     public UploadBlobHandler(DbClient dbClient, JwtService jwtService, AuditWriter auditWriter,
-            S3Client s3Client, CompletenessCalculator completenessCalculator) {
+            S3Client s3Client, CompletenessCalculator completenessCalculator,
+            ClosureWriteGate closureWriteGate) {
         this.dbClient = dbClient;
         this.jwtService = jwtService;
         this.auditWriter = auditWriter;
         this.s3Client = s3Client;
         this.completenessCalculator = completenessCalculator;
+        this.closureWriteGate = closureWriteGate;
     }
 
     /** PUT /locker/blob/{categoryCode} — validates, uploads to S3, records blob_versions row. */
@@ -101,6 +105,8 @@ public class UploadBlobHandler {
 
         JwtPayload jwt = validateCreatorJwt(authHeader);
         String creatorId = jwt.sub();
+
+        closureWriteGate.assertWritesAllowed(creatorId);
 
         validateRequest(request);
 

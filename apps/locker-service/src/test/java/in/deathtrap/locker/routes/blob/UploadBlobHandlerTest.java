@@ -35,6 +35,7 @@ class UploadBlobHandlerTest {
     @Mock private AuditWriter auditWriter;
     @Mock private S3Client s3Client;
     @Mock private CompletenessCalculator completenessCalculator;
+    @Mock private in.deathtrap.locker.service.ClosureWriteGate closureWriteGate;
 
     @InjectMocks private UploadBlobHandler handler;
 

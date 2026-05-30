@@ -32,6 +32,7 @@ class SkipAssetHandlerTest {
     @Mock private JwtService jwtService;
     @Mock private AuditWriter auditWriter;
     @Mock private CompletenessCalculator completenessCalculator;
+    @Mock private in.deathtrap.locker.service.ClosureWriteGate closureWriteGate;
 
     @InjectMocks private SkipAssetHandler handler;
 

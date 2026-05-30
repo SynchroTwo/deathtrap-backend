@@ -12,6 +12,7 @@ import in.deathtrap.common.types.enums.AuditEventType;
 import in.deathtrap.common.types.enums.AuditResult;
 import in.deathtrap.common.types.enums.PartyType;
 import in.deathtrap.locker.config.JwtService;
+import in.deathtrap.locker.service.ClosureWriteGate;
 import jakarta.validation.Valid;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -89,11 +90,14 @@ public class FamilyVaultHandler {
     private final DbClient dbClient;
     private final JwtService jwtService;
     private final AuditWriter auditWriter;
+    private final ClosureWriteGate closureWriteGate;
 
-    public FamilyVaultHandler(DbClient dbClient, JwtService jwtService, AuditWriter auditWriter) {
+    public FamilyVaultHandler(DbClient dbClient, JwtService jwtService, AuditWriter auditWriter,
+            ClosureWriteGate closureWriteGate) {
         this.dbClient = dbClient;
         this.jwtService = jwtService;
         this.auditWriter = auditWriter;
+        this.closureWriteGate = closureWriteGate;
     }
 
     /** POST /locker/family-vault/wraps — creator adds a wrap. */
@@ -104,6 +108,8 @@ public class FamilyVaultHandler {
 
         JwtPayload jwt = validateCreatorJwt(authHeader);
         String creatorId = jwt.sub();
+
+        closureWriteGate.assertWritesAllowed(creatorId);
 
         // 1. Locker must be in family_vault mode.
         String mode = dbClient.queryOne(SELECT_LOCKER_MODE, STRING_MAPPER, creatorId).orElse(null);
@@ -177,6 +183,8 @@ public class FamilyVaultHandler {
 
         JwtPayload jwt = validateCreatorJwt(authHeader);
         String creatorId = jwt.sub();
+
+        closureWriteGate.assertWritesAllowed(creatorId);
 
         WrapOwner owner = dbClient.queryOne(SELECT_WRAP_OWNER, WRAP_OWNER_MAPPER, wrapId)
                 .orElseThrow(() -> new AppException(ErrorCode.FAMILY_VAULT_WRAP_NOT_FOUND,

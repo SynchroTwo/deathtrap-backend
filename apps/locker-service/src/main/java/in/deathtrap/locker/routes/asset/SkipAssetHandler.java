@@ -12,6 +12,7 @@ import in.deathtrap.common.types.enums.PartyType;
 import in.deathtrap.locker.config.JwtService;
 import in.deathtrap.locker.rowmapper.AssetIndexRowMapper;
 import in.deathtrap.locker.rowmapper.AssetIndexRowMapper.AssetIndex;
+import in.deathtrap.locker.service.ClosureWriteGate;
 import in.deathtrap.locker.service.CompletenessCalculator;
 import in.deathtrap.locker.service.CompletenessCalculator.CompletenessScore;
 import java.util.List;
@@ -49,14 +50,17 @@ public class SkipAssetHandler {
     private final JwtService jwtService;
     private final AuditWriter auditWriter;
     private final CompletenessCalculator completenessCalculator;
+    private final ClosureWriteGate closureWriteGate;
 
     /** Constructs SkipAssetHandler with required dependencies. */
     public SkipAssetHandler(DbClient dbClient, JwtService jwtService,
-            AuditWriter auditWriter, CompletenessCalculator completenessCalculator) {
+            AuditWriter auditWriter, CompletenessCalculator completenessCalculator,
+            ClosureWriteGate closureWriteGate) {
         this.dbClient = dbClient;
         this.jwtService = jwtService;
         this.auditWriter = auditWriter;
         this.completenessCalculator = completenessCalculator;
+        this.closureWriteGate = closureWriteGate;
     }
 
     /** PATCH /locker/asset/{categoryCode}/skip — marks an empty asset as skipped.
@@ -69,6 +73,8 @@ public class SkipAssetHandler {
 
         JwtPayload jwt = validateCreatorJwt(authHeader);
         String creatorId = jwt.sub();
+
+        closureWriteGate.assertWritesAllowed(creatorId);
 
         List<String> lockerRows = dbClient.query(SELECT_LOCKER, STRING_MAPPER, creatorId);
         if (lockerRows.isEmpty()) {

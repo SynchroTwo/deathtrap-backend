@@ -56,6 +56,25 @@ public class UploadDeathCertHandler {
             "AND status = 'active'::nominee_status_enum LIMIT 1";
     private static final String SELECT_UPLOADER_NAME =
             "SELECT full_name FROM users WHERE user_id = ? LIMIT 1";
+    // E011 Phase 1B: locker mode lookup + 3-cert threshold + open-closure dedup.
+    private static final String SELECT_LOCKER_MODE =
+            "SELECT recovery_mode::text FROM locker_meta WHERE user_id = ? LIMIT 1";
+    private static final String SELECT_NOMINEE_ACTIVE_WRAP =
+            "SELECT 1 FROM family_vault_wraps WHERE nominee_party_id = ? AND creator_id = ? " +
+            "AND status = 'active' LIMIT 1";
+    private static final String COUNT_DISTINCT_ACTIVE_WRAP_UPLOADERS =
+            "SELECT COUNT(DISTINCT d.uploader_party_id) FROM death_cert_uploads d " +
+            "WHERE d.creator_id = ? AND d.uploader_party_id IN (" +
+            "  SELECT nominee_party_id FROM family_vault_wraps " +
+            "  WHERE creator_id = d.creator_id AND status = 'active'" +
+            ")";
+    private static final String SELECT_OPEN_CLOSURE_ID =
+            "SELECT closure_id FROM account_closure WHERE creator_id = ? " +
+            "AND status IN ('pending_objection', 'finalising') LIMIT 1";
+    private static final String INSERT_CLOSURE =
+            "INSERT INTO account_closure (closure_id, creator_id, trigger_kind, trigger_context_json, " +
+            "objection_window_ends_at, status) " +
+            "VALUES (?, ?, 'three_cert_threshold', ?::jsonb, NOW() + INTERVAL '30 days', 'pending_objection')";
     private static final String SELECT_NOMINEE_TRUSTEE =
             "SELECT 1 FROM nominees WHERE nominee_id = ? AND creator_id = ? " +
             "AND status = 'active'::nominee_status_enum AND is_trustee = TRUE LIMIT 1";
@@ -130,7 +149,14 @@ public class UploadDeathCertHandler {
                     "Got " + request.mimeType() + "; allowed: " + ALLOWED_MIMES);
         }
 
-        // 2. Authorization — model-dependent.
+        // 2. Locker-mode dispatch. E011 family_vault has no recovery_blob — different
+        //    auth path and trigger logic (3-cert threshold instead of confirmation_window).
+        String recoveryMode = dbClient.queryOne(SELECT_LOCKER_MODE, STRING_MAPPER, creatorId).orElse(null);
+        if ("family_vault".equals(recoveryMode)) {
+            return handleFamilyVaultUpload(request, uploaderId, creatorId);
+        }
+
+        // 3. Authorization — model-dependent (E006 model_a/model_b).
         String shape = dbClient.queryOne(SELECT_ACTIVE_BLOB_SHAPE, STRING_MAPPER, creatorId)
                 .orElseThrow(() -> AppException.notFound("recovery_blob"));
         if ("sequential".equals(shape)) {
@@ -224,6 +250,92 @@ public class UploadDeathCertHandler {
                         plan.newWindow != null ? plan.newWindow.expiresAt : null,
                         plan.newWindow != null ? plan.newWindow.lawyerExpiresAt : null),
                 requestId));
+    }
+
+    /** E011 Phase 1B — family_vault death-cert upload path. Skips confirmation_window;
+     *  runs 3-cert threshold against active-wrap uploaders; opens account_closure on hit. */
+    private ResponseEntity<ApiResponse<UploadDeathCertResponse>> handleFamilyVaultUpload(
+            UploadDeathCertRequest request, String uploaderId, String creatorId) {
+
+        // Authorization: caller must have an ACTIVE wrap on this creator.
+        if (dbClient.queryOne(SELECT_NOMINEE_ACTIVE_WRAP, ONE_MAPPER, uploaderId, creatorId).isEmpty()) {
+            throw new AppException(ErrorCode.RECOVERY_FORBIDDEN_RELATION,
+                    "Caller does not have an active Family Vault wrap for this creator");
+        }
+
+        byte[] certBytes = decodeAndValidateCert(request);
+
+        String certId = CsprngUtil.randomUlid();
+        String s3Key = "recovery/death-certs/" + creatorId + "/" + certId;
+        putToS3OrDev(certId, s3Key, certBytes);
+
+        // Insert the cert row. Then run threshold + maybe open closure.
+        final String[] openedClosureId = {null};
+        dbClient.withTransaction(status -> {
+            dbClient.execute(INSERT_CERT,
+                    certId, creatorId, uploaderId, PartyType.NOMINEE.name().toLowerCase(),
+                    s3Key, request.mimeType(), request.sizeBytes(), request.contentHashSha256());
+
+            // Threshold check after insert so this cert counts.
+            int distinct = dbClient.queryOne(COUNT_DISTINCT_ACTIVE_WRAP_UPLOADERS, INT_MAPPER, creatorId)
+                    .orElse(0);
+            if (distinct < 3) {
+                return null;
+            }
+            // Don't open a second closure if one is already open.
+            if (dbClient.queryOne(SELECT_OPEN_CLOSURE_ID, STRING_MAPPER, creatorId).isPresent()) {
+                return null;
+            }
+            String closureId = CsprngUtil.randomUlid();
+            String contextJson = "{\"triggeringCertId\":\"" + certId + "\",\"distinctUploaders\":"
+                    + distinct + "}";
+            dbClient.execute(INSERT_CLOSURE, closureId, creatorId, contextJson);
+            openedClosureId[0] = closureId;
+            return null;
+        });
+
+        // Audit cert upload.
+        auditWriter.write(AuditWritePayload
+                .builder(AuditEventType.DEATH_CERT_UPLOADED, AuditResult.SUCCESS)
+                .actorId(uploaderId).actorType(PartyType.NOMINEE).targetId(certId)
+                .metadataJson(Map.of(
+                        "creatorId", creatorId,
+                        "windowAction", openedClosureId[0] != null
+                                ? "family_vault_closure_opened" : "family_vault_logged",
+                        "sizeBytes", request.sizeBytes(),
+                        "closureId", openedClosureId[0] != null ? openedClosureId[0] : ""))
+                .build());
+
+        // Audit closure-opened separately so the audit trail surfaces it cleanly.
+        if (openedClosureId[0] != null) {
+            auditWriter.write(AuditWritePayload
+                    .builder(AuditEventType.FAMILY_VAULT_CLOSURE_OPENED, AuditResult.SUCCESS)
+                    .actorId(uploaderId).actorType(PartyType.NOMINEE).targetId(openedClosureId[0])
+                    .metadataJson(Map.of(
+                            "creatorId", creatorId,
+                            "closureId", openedClosureId[0],
+                            "triggerKind", "three_cert_threshold",
+                            "triggeringCertId", certId))
+                    .build());
+            log.info("Family vault closure opened: closureId={} creatorId={} triggeringCertId={}",
+                    openedClosureId[0], creatorId, certId);
+            // §9.1 fan-out lands here once NotificationSenderService.fanOutClosureOpened is wired.
+        }
+
+        log.info("Death cert uploaded (family_vault): certId={} creatorId={} uploader={} closureOpened={}",
+                certId, creatorId, uploaderId, openedClosureId[0] != null);
+
+        Instant expiresAtForResp = openedClosureId[0] != null
+                ? Instant.now().plus(java.time.Duration.ofDays(30)) : null;
+
+        return ResponseEntity.status(201).body(ApiResponse.ok(
+                new UploadDeathCertResponse(
+                        certId,
+                        openedClosureId[0],
+                        openedClosureId[0] != null ? "family_vault_closure_opened" : "family_vault_logged",
+                        expiresAtForResp,
+                        null),
+                UUID.randomUUID().toString()));
     }
 
     /** Decides what the current cert upload does to any existing confirmation window. */
