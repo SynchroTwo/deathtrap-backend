@@ -62,6 +62,13 @@ public enum ErrorCode {
     FAMILY_VAULT_WRAP_ALREADY_REVOKED(409, "Family Vault wrap has already been revoked"),
     FAMILY_VAULT_WRAP_REVOKED(403, "Your Family Vault access has been revoked"),
 
+    // E011 Phase 1B — closure flow
+    FAMILY_VAULT_CLOSURE_NOT_FOUND(404, "Family Vault closure not found"),
+    FAMILY_VAULT_CLOSURE_NOT_OBJECTABLE(409, "Family Vault closure is no longer objectable"),
+    FAMILY_VAULT_CLOSURE_WINDOW_EXPIRED(409, "Family Vault closure objection window has expired"),
+    FAMILY_VAULT_CLOSURE_LOCKED(423, "Locker is closed or pending closure. Writes are not permitted."),
+    FAMILY_VAULT_EXPORT_NOT_READY(409, "Family Vault export not yet available (archive in progress)"),
+
     // Server
     INTERNAL_ERROR(500, "An unexpected error occurred"),
     EXTERNAL_SERVICE_ERROR(502, "External service unavailable"),
