@@ -14,7 +14,7 @@ import in.deathtrap.common.types.enums.AuditEventType;
 import in.deathtrap.common.types.enums.AuditResult;
 import in.deathtrap.common.types.enums.PartyType;
 import in.deathtrap.recovery.config.JwtService;
-import in.deathtrap.recovery.service.NotificationSenderService;
+import in.deathtrap.notification.NotificationSenderService;
 import jakarta.validation.Valid;
 import java.sql.Timestamp;
 import java.time.Instant;

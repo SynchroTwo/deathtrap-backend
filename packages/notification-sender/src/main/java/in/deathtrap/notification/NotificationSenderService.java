@@ -1,8 +1,7 @@
-package in.deathtrap.recovery.service;
+package in.deathtrap.notification;
 
 import in.deathtrap.common.db.DbClient;
 import in.deathtrap.common.types.enums.PartyType;
-import in.deathtrap.recovery.config.ActionLinkTokenService;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -263,7 +262,9 @@ public class NotificationSenderService {
     /** Returns e.g. "a***@example.com" — keeps logs PII-light. */
     private static String mask(String email) {
         int at = email.indexOf('@');
-        if (at <= 1) return "***" + email.substring(Math.max(0, at));
+        if (at <= 1) {
+            return "***" + email.substring(Math.max(0, at));
+        }
         return email.charAt(0) + "***" + email.substring(at);
     }
 
@@ -271,7 +272,9 @@ public class NotificationSenderService {
      *  Purely informational, no action links. Per copy doc §2. */
     public void fanOutConfirmationRecorded(String windowId, String creatorId,
             String confirmingPartyId, PartyType confirmingPartyType, Instant expiresAt) {
-        if (!notificationsEnabled) return;
+        if (!notificationsEnabled) {
+            return;
+        }
         try {
             String creatorName = lookupName(creatorId);
             String confirmingPartyName = lookupNameForParty(confirmingPartyId, confirmingPartyType);
@@ -294,7 +297,9 @@ public class NotificationSenderService {
     /** §3 — objection recorded → cancellation notice to all parties. */
     public void fanOutObjection(String windowId, String creatorId, String objectingPartyId,
             PartyType objectingPartyType, String reason, Instant cooloffUntil) {
-        if (!notificationsEnabled) return;
+        if (!notificationsEnabled) {
+            return;
+        }
         try {
             String creatorName = lookupName(creatorId);
             String objectingPartyName = lookupNameForParty(objectingPartyId, objectingPartyType);
@@ -320,7 +325,9 @@ public class NotificationSenderService {
 
     /** §4 — window expired without objection → recovery proceeding. */
     public void fanOutWindowExpired(String windowId, String creatorId, int windowHours) {
-        if (!notificationsEnabled) return;
+        if (!notificationsEnabled) {
+            return;
+        }
         try {
             String creatorName = lookupName(creatorId);
             String subject = "Recovery proceeding — " + creatorName + "'s locker";
@@ -336,7 +343,9 @@ public class NotificationSenderService {
 
     /** §5 — lawyer silence at 168h → cancellation. */
     public void fanOutLawyerSilent(String windowId, String creatorId, Instant cooloffUntil) {
-        if (!notificationsEnabled) return;
+        if (!notificationsEnabled) {
+            return;
+        }
         try {
             String creatorName = lookupName(creatorId);
             Optional<Recipient> lawyerOpt = dbClient.queryOne(SELECT_LAWYER, RECIPIENT_MAPPER, creatorId);
@@ -414,8 +423,12 @@ public class NotificationSenderService {
 
     /** "creator" | "trustee" | "nominee" | "lawyer" — the role label shown in copy. */
     private String roleLabel(String partyId, PartyType type, String creatorId) {
-        if (type == PartyType.CREATOR || partyId.equals(creatorId)) return "creator";
-        if (type == PartyType.LAWYER) return "lawyer";
+        if (type == PartyType.CREATOR || partyId.equals(creatorId)) {
+            return "creator";
+        }
+        if (type == PartyType.LAWYER) {
+            return "lawyer";
+        }
         // Nominee — check is_trustee for "trustee" vs "nominee" label.
         Boolean isTrustee = dbClient.queryOne(
                 "SELECT is_trustee FROM nominees WHERE nominee_id = ? AND creator_id = ? LIMIT 1",

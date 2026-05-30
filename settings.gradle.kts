@@ -6,6 +6,7 @@ include("packages:common-response")
 include("packages:common-db")
 include("packages:common-crypto")
 include("packages:common-audit")
+include("packages:notification-sender")
 
 include("apps:auth-service")
 include("apps:locker-service")

@@ -9,6 +9,7 @@ dependencies {
     implementation(project(":packages:common-db"))
     implementation(project(":packages:common-crypto"))
     implementation(project(":packages:common-audit"))
+    implementation(project(":packages:notification-sender"))
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-data-jdbc")
     implementation("org.springframework.boot:spring-boot-starter-validation")

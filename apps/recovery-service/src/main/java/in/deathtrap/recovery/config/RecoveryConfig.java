@@ -1,6 +1,7 @@
 package in.deathtrap.recovery.config;
 
 import in.deathtrap.common.db.DbClient;
+import in.deathtrap.notification.ActionLinkTokenService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;

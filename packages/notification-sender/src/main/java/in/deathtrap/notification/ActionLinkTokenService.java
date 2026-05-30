@@ -1,6 +1,7 @@
-package in.deathtrap.recovery.config;
+package in.deathtrap.notification;
 
 import in.deathtrap.common.errors.AppException;
+import in.deathtrap.common.errors.ErrorCode;
 import in.deathtrap.common.types.enums.PartyType;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
@@ -11,13 +12,19 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
+import java.util.Optional;
 import javax.crypto.SecretKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Mints and validates single-use action-link tokens for the confirmation window flow.
- *  Tokens are bound to (windowId, partyId) and used to authenticate
- *  POST /recovery/window/{windowId}/{confirm,object} calls. */
+/** Mints and validates single-use action-link tokens. Two flavours:
+ *  - "action-link" tokens bind (windowId, partyId) for the E006 confirmation
+ *    window flow (POST /recovery/window/{windowId}/{confirm,object}).
+ *  - "closure-object" tokens bind (closureId, creatorId) for the E011 Phase 1B
+ *    closure-object flow (POST /locker/family-vault/closure/{closureId}/object).
+ *  Lifted into the shared notification-sender package in Phase 1C so both
+ *  locker-service and recovery-service can mint without crossing service
+ *  boundaries. */
 public class ActionLinkTokenService {
 
     private static final Logger log = LoggerFactory.getLogger(ActionLinkTokenService.class);
@@ -96,5 +103,47 @@ public class ActionLinkTokenService {
                 .expiration(Date.from(now.plus(ttl)))
                 .signWith(signingKey)
                 .compact();
+    }
+
+    /** Verifies a closure-object token and asserts it's bound to the given closureId.
+     *  Returns Optional.empty() on any failure (expired, malformed, wrong type, wrong
+     *  closureId). Caller throws FAMILY_VAULT_CLOSURE_TOKEN_INVALID on empty. */
+    public Optional<ClosureTokenClaims> verifyClosure(String token, String expectedClosureId) {
+        if (token == null || token.isBlank() || expectedClosureId == null) {
+            return Optional.empty();
+        }
+        try {
+            Claims claims = Jwts.parser()
+                    .verifyWith(signingKey)
+                    .build()
+                    .parseSignedClaims(token)
+                    .getPayload();
+            String tokenType = claims.get(CLAIM_TOKEN_TYPE, String.class);
+            if (!TOKEN_TYPE_CLOSURE_OBJECT.equals(tokenType)) {
+                log.warn("Closure-object token rejected: wrong tokenType={}", tokenType);
+                return Optional.empty();
+            }
+            String tokenClosureId = claims.get(CLAIM_CLOSURE_ID, String.class);
+            if (tokenClosureId == null || !tokenClosureId.equals(expectedClosureId)) {
+                log.warn("Closure-object token rejected: closureId mismatch (token={}, path={})",
+                        tokenClosureId, expectedClosureId);
+                return Optional.empty();
+            }
+            return Optional.of(new ClosureTokenClaims(claims.getSubject(), tokenClosureId));
+        } catch (ExpiredJwtException ex) {
+            log.warn("Closure-object token expired");
+            return Optional.empty();
+        } catch (JwtException | IllegalArgumentException ex) {
+            log.warn("Closure-object token invalid: {}", ex.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    public record ClosureTokenClaims(String creatorId, String closureId) {}
+
+    /** Convenience: convert verifyClosure failure into the 401 AppException. */
+    public ClosureTokenClaims verifyClosureOrThrow(String token, String expectedClosureId) {
+        return verifyClosure(token, expectedClosureId)
+                .orElseThrow(() -> new AppException(ErrorCode.FAMILY_VAULT_CLOSURE_TOKEN_INVALID));
     }
 }

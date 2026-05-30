@@ -69,6 +69,14 @@ public enum ErrorCode {
     FAMILY_VAULT_CLOSURE_LOCKED(423, "Locker is closed or pending closure. Writes are not permitted."),
     FAMILY_VAULT_EXPORT_NOT_READY(409, "Family Vault export not yet available (archive in progress)"),
 
+    // E011 Phase 1C — closure-object email-link defence-in-depth + mode migration + dev endpoints
+    FAMILY_VAULT_CLOSURE_TOKEN_INVALID(401, "Closure object link token is invalid or expired"),
+    FAMILY_VAULT_MIGRATION_INVALID_TRANSITION(400, "Mode migration transition is not allowed"),
+    FAMILY_VAULT_MIGRATION_BLOB_REQUIRED(412, "Recovery blob must be uploaded before migrating away from Family Vault"),
+    FAMILY_VAULT_MIGRATION_WRAPS_REQUIRED(412, "At least one Family Vault wrap must exist before migrating to Family Vault"),
+    FAMILY_VAULT_NOTIFY_SETTING_INVALID(400, "Notification settings payload is malformed"),
+    DEV_ENDPOINT_DISABLED(403, "Dev endpoint is disabled in this environment"),
+
     // Server
     INTERNAL_ERROR(500, "An unexpected error occurred"),
     EXTERNAL_SERVICE_ERROR(502, "External service unavailable"),
