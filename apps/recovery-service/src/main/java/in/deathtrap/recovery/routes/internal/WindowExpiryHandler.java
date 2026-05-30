@@ -16,9 +16,16 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectTaggingRequest;
+import software.amazon.awssdk.services.s3.model.StorageClass;
+import software.amazon.awssdk.services.s3.model.Tag;
+import software.amazon.awssdk.services.s3.model.Tagging;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -85,6 +92,19 @@ public class WindowExpiryHandler {
             "UPDATE account_closure SET reminder_72h_sent_at = NOW() " +
             "WHERE closure_id = ? AND reminder_72h_sent_at IS NULL";
 
+    // E011 Phase 1C §7 — archive flow. Finalising closures pending archive copy.
+    private static final String SELECT_FINALISING_CLOSURES_TO_ARCHIVE =
+            "SELECT closure_id, creator_id FROM account_closure " +
+            "WHERE status = 'finalising' AND archive_complete_at IS NULL";
+    private static final String SELECT_LIVE_BLOBS_FOR_CREATOR =
+            "SELECT bv.blob_id, bv.s3_key FROM blob_versions bv " +
+            "JOIN locker_meta lm ON lm.locker_id = bv.locker_id " +
+            "WHERE lm.user_id = ? AND bv.is_current = TRUE";
+    private static final String UPDATE_CLOSURE_ARCHIVED =
+            "UPDATE account_closure SET status = 'closed', archive_complete_at = NOW(), " +
+            "archive_bucket = ?, archive_s3_prefix = ?, archive_object_count = ? " +
+            "WHERE closure_id = ? AND status = 'finalising' AND archive_complete_at IS NULL";
+
     // E011 Phase 1C §6.1 — 7d-post-finalise export-listing reminder.
     private static final String SELECT_CLOSURES_DUE_EXPORT_REMINDER =
             "SELECT closure_id, creator_id FROM account_closure " +
@@ -128,22 +148,34 @@ public class WindowExpiryHandler {
             rs.getString("closure_id"),
             rs.getString("creator_id"));
     private static final RowMapper<String> NOMINEE_ID_MAPPER = (rs, row) -> rs.getString("nominee_party_id");
+    private static final RowMapper<ClosureToArchive> ARCHIVE_MAPPER = (rs, row) -> new ClosureToArchive(
+            rs.getString("closure_id"),
+            rs.getString("creator_id"));
+    private static final RowMapper<LiveBlob> LIVE_BLOB_MAPPER = (rs, row) -> new LiveBlob(
+            rs.getString("blob_id"),
+            rs.getString("s3_key"));
 
     private final DbClient dbClient;
     private final AuditWriter auditWriter;
     private final NotificationSenderService notificationSender;
     private final ActionLinkTokenService actionLinkTokenService;
+    private final S3Client s3Client;
 
     @Value("${INTERNAL_WORKER_SECRET:}")
     private String internalWorkerSecret;
 
+    @Value("${S3_BUCKET_NAME:}")
+    private String s3BucketName;
+
     public WindowExpiryHandler(DbClient dbClient, AuditWriter auditWriter,
             NotificationSenderService notificationSender,
-            ActionLinkTokenService actionLinkTokenService) {
+            ActionLinkTokenService actionLinkTokenService,
+            S3Client s3Client) {
         this.dbClient = dbClient;
         this.auditWriter = auditWriter;
         this.notificationSender = notificationSender;
         this.actionLinkTokenService = actionLinkTokenService;
+        this.s3Client = s3Client;
     }
 
     /** POST /recovery/internal/window-tick — process expiry transitions for pending windows. */
@@ -210,10 +242,14 @@ public class WindowExpiryHandler {
         int reminders72h = tickClosure72hReminders();
         int exportReminders = tickClosureExportReminders();
 
+        // E011 Phase 1C §7 — archive flow. Finalising → closed transition with
+        // GLACIER_IR copy of every current blob into the archive prefix.
+        int closuresArchived = tickClosureArchive();
+
         String requestId = UUID.randomUUID().toString();
         return ResponseEntity.ok(ApiResponse.ok(
                 new TickResponse(pending.size(), confirmedCount, lawyerSilentCount,
-                        closuresFinalised, reminders72h, exportReminders),
+                        closuresFinalised, reminders72h, exportReminders, closuresArchived),
                 requestId));
     }
 
@@ -328,6 +364,70 @@ public class WindowExpiryHandler {
         return fired;
     }
 
+    /** E011 Phase 1C §7.1 — archive job. Copies every current blob from the live
+     *  prefix to the archive prefix with GLACIER_IR storage class, tags the live
+     *  source with closure-archived=true (drives the S3 lifecycle rule), and
+     *  atomically flips finalising → closed. Per §14.2 LOCKED the archive uses
+     *  the same bucket as live, just a different prefix. Best-effort per-closure
+     *  isolation — one failure doesn't block other closures. */
+    private int tickClosureArchive() {
+        if (s3BucketName == null || s3BucketName.isBlank()) {
+            log.warn("S3_BUCKET_NAME not configured; skipping archive tick");
+            return 0;
+        }
+        List<ClosureToArchive> pending = dbClient.query(SELECT_FINALISING_CLOSURES_TO_ARCHIVE, ARCHIVE_MAPPER);
+        int archived = 0;
+        for (ClosureToArchive c : pending) {
+            try {
+                String archivePrefix = "archive/closure/" + c.closureId + "/";
+                List<LiveBlob> blobs = dbClient.query(SELECT_LIVE_BLOBS_FOR_CREATOR, LIVE_BLOB_MAPPER, c.creatorId);
+                List<String> copiedKeys = new ArrayList<>();
+                for (LiveBlob b : blobs) {
+                    if (b.s3Key == null || b.s3Key.isBlank()) {
+                        continue;
+                    }
+                    String archiveKey = archivePrefix + b.s3Key;
+                    s3Client.copyObject(CopyObjectRequest.builder()
+                            .sourceBucket(s3BucketName)
+                            .sourceKey(b.s3Key)
+                            .destinationBucket(s3BucketName)
+                            .destinationKey(archiveKey)
+                            .storageClass(StorageClass.GLACIER_IR)
+                            .build());
+                    s3Client.putObjectTagging(PutObjectTaggingRequest.builder()
+                            .bucket(s3BucketName)
+                            .key(b.s3Key)
+                            .tagging(Tagging.builder()
+                                    .tagSet(Tag.builder().key("closure-archived").value("true").build())
+                                    .build())
+                            .build());
+                    copiedKeys.add(b.s3Key);
+                }
+                int updated = dbClient.execute(UPDATE_CLOSURE_ARCHIVED,
+                        s3BucketName, archivePrefix, copiedKeys.size(), c.closureId);
+                if (updated == 1) {
+                    archived++;
+                    auditWriter.write(AuditWritePayload
+                            .builder(AuditEventType.FAMILY_VAULT_CLOSURE_ARCHIVED, AuditResult.SUCCESS)
+                            .actorType(PartyType.SYSTEM).targetId(c.closureId)
+                            .metadataJson(Map.of(
+                                    "closureId", c.closureId,
+                                    "creatorId", c.creatorId,
+                                    "archiveBucket", s3BucketName,
+                                    "archivePrefix", archivePrefix,
+                                    "objectCount", copiedKeys.size()))
+                            .build());
+                    log.info("Closure archived: closureId={} creatorId={} objectCount={}",
+                            c.closureId, c.creatorId, copiedKeys.size());
+                }
+            } catch (Exception ex) {
+                log.error("Archive failed: closureId={} creatorId={} err={}",
+                        c.closureId, c.creatorId, ex.getMessage());
+            }
+        }
+        return archived;
+    }
+
     private record PendingWindow(String windowId, String creatorId, int windowHours,
             Instant expiresAt, Instant lawyerExpiresAt, boolean lawyerDesignated) {}
 
@@ -338,6 +438,10 @@ public class WindowExpiryHandler {
 
     private record ClosureDueExportReminder(String closureId, String creatorId) {}
 
+    private record ClosureToArchive(String closureId, String creatorId) {}
+
+    private record LiveBlob(String blobId, String s3Key) {}
+
     private record TickResponse(int candidates, int confirmed, int lawyerSilent, int closuresFinalised,
-            int reminders72h, int exportReminders) {}
+            int reminders72h, int exportReminders, int closuresArchived) {}
 }

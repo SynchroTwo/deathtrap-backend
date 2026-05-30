@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,6 +66,18 @@ public class DownloadBlobHandler {
             "AND n.status = 'active'::nominee_status_enum LIMIT 1";
     private static final String SELECT_REVOKED_WRAP_EXISTS =
             "SELECT 1 FROM family_vault_wraps WHERE nominee_party_id = ? AND creator_id = ? AND status = 'revoked' LIMIT 1";
+    // E011 Phase 1C §7.2 — post-finalise read-path branch. When the closure is closed,
+    // the archive copy is complete, and the 7d live-bucket grace has elapsed, reads
+    // are served from the archive prefix instead. Prior to the 7d grace, the live
+    // ciphertext is still authoritative (S3 lifecycle hasn't expired it yet).
+    private static final String SELECT_ARCHIVE_FOR_CREATOR =
+            "SELECT archive_bucket, archive_s3_prefix FROM account_closure " +
+            "WHERE creator_id = ? AND status = 'closed' " +
+            "AND archive_complete_at IS NOT NULL " +
+            "AND finalised_at <= NOW() - INTERVAL '7 days' " +
+            "LIMIT 1";
+    private static final String SELECT_CREATOR_FOR_LOCKER =
+            "SELECT user_id FROM locker_meta WHERE locker_id = ? LIMIT 1";
     private static final String SELECT_BLOB =
             "SELECT bv.blob_id, bv.asset_id, bv.locker_id, bv.s3_key, bv.size_bytes, " +
             "bv.content_hash_sha256, bv.schema_version, bv.version, bv.is_current, bv.created_at, bv.updated_at " +
@@ -76,6 +89,8 @@ public class DownloadBlobHandler {
     private static final RowMapper<Integer> ONE_MAPPER = (rs, row) -> 1;
     private static final RowMapper<FvLockerRow> FV_LOCKER_MAPPER = (rs, row) ->
             new FvLockerRow(rs.getString("locker_id"), rs.getString("wrap_id"));
+    private static final RowMapper<ArchiveLocation> ARCHIVE_MAPPER = (rs, row) ->
+            new ArchiveLocation(rs.getString("archive_bucket"), rs.getString("archive_s3_prefix"));
 
     private final DbClient dbClient;
     private final JwtService jwtService;
@@ -195,13 +210,33 @@ public class DownloadBlobHandler {
             log.warn("[DEV] Presigned URL generated locally for blobId={}", blob.blobId());
             return "http://localhost/dev-blob/" + blob.blobId();
         }
+        // §7.2 — if the blob's locker has an archived closure past the 7d live grace,
+        // serve from the archive prefix (Glacier IR — millisecond restore). Otherwise
+        // live bucket. The lookup is single-query, indexed, fires on every download —
+        // expected cardinality is 1 row per creator that ever closed (vanishingly low
+        // hit rate), so the cost is dominated by the S3 presign call either way.
         String bucket = s3BucketName;
         String key = blob.s3Key();
+        String creatorId = dbClient.queryOne(SELECT_CREATOR_FOR_LOCKER, STRING_MAPPER, blob.lockerId())
+                .orElse(null);
+        if (creatorId != null) {
+            Optional<ArchiveLocation> archive = dbClient.queryOne(SELECT_ARCHIVE_FOR_CREATOR,
+                    ARCHIVE_MAPPER, creatorId);
+            if (archive.isPresent() && archive.get().bucket() != null
+                    && archive.get().prefix() != null) {
+                bucket = archive.get().bucket();
+                key = archive.get().prefix() + blob.s3Key();
+            }
+        }
+        final String finalBucket = bucket;
+        final String finalKey = key;
         PresignedGetObjectRequest presigned = s3Presigner.presignGetObject(r -> r
                 .signatureDuration(Duration.ofSeconds(PRESIGNED_URL_SECONDS))
-                .getObjectRequest(gor -> gor.bucket(bucket).key(key)));
+                .getObjectRequest(gor -> gor.bucket(finalBucket).key(finalKey)));
         return presigned.url().toString();
     }
+
+    private record ArchiveLocation(String bucket, String prefix) {}
 
     private record DownloadBlobResponse(
             String blobVersionId,
