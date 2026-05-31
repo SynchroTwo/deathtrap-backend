@@ -9,9 +9,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class CompletenessCalculator {
 
-    private static final int TOTAL_ASSETS = 24;
-    private static final int ONLINE_ASSETS = 12;
-    private static final int OFFLINE_ASSETS = 12;
+    private static final int TOTAL_ASSETS = 30;
+    private static final int ONLINE_ASSETS = 14;
+    private static final int OFFLINE_ASSETS = 16;
 
     private static final String COUNT_BY_STATUS =
             "SELECT COUNT(*) FROM asset_index WHERE locker_id = ? AND status = ?::asset_status_enum";

@@ -43,7 +43,7 @@ class LockerServiceIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
-    void initLocker_createsLockerMetaAnd25AssetRows() {
+    void initLocker_createsLockerMetaAnd30AssetRows() {
         String creatorId = insertUser("+911111111111", "locker-init@example.com");
         String token = issueCreatorJwt(creatorId);
 
@@ -59,7 +59,7 @@ class LockerServiceIntegrationTest extends IntegrationTestBase {
         String lockerId = (String) lockers.get(0).get("locker_id");
         int assetCount = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM asset_index WHERE locker_id = ?", Integer.class, lockerId);
-        assertEquals(25, assetCount, "25 asset_index rows should be created");
+        assertEquals(30, assetCount, "30 asset_index rows should be created");
     }
 
     @Test

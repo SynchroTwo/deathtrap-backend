@@ -45,32 +45,32 @@ class CompletenessCalculatorTest {
     }
 
     @Test
-    void twelveFilledZeroSkipped_returns50Percent() {
+    void fifteenFilledZeroSkipped_returns50PercentOverall() {
         when(db.query(anyString(), any(), any(), any()))
-                .thenReturn(List.of(12L)) // filled
+                .thenReturn(List.of(15L)) // filled
                 .thenReturn(List.of(0L)); // skipped
         when(db.query(anyString(), any(), any(), any(), any()))
-                .thenReturn(List.of(6L))  // online filled
+                .thenReturn(List.of(7L))  // online filled
                 .thenReturn(List.of(0L))  // online skipped
-                .thenReturn(List.of(6L))  // offline filled
+                .thenReturn(List.of(8L))  // offline filled
                 .thenReturn(List.of(0L)); // offline skipped
 
         CompletenessScore score = calculator.recalculate("locker-1");
 
-        assertEquals(50, score.overall());
-        assertEquals(50, score.onlinePct());
-        assertEquals(50, score.offlinePct());
+        assertEquals(50, score.overall());   // 15/30
+        assertEquals(50, score.onlinePct()); // 7/14
+        assertEquals(50, score.offlinePct()); // 8/16
     }
 
     @Test
-    void allTwentyFourFilled_returns100Percent() {
+    void allThirtyFilled_returns100Percent() {
         when(db.query(anyString(), any(), any(), any()))
-                .thenReturn(List.of(24L)) // filled
+                .thenReturn(List.of(30L)) // filled
                 .thenReturn(List.of(0L)); // skipped
         when(db.query(anyString(), any(), any(), any(), any()))
-                .thenReturn(List.of(12L)) // online filled
+                .thenReturn(List.of(14L)) // online filled
                 .thenReturn(List.of(0L))  // online skipped
-                .thenReturn(List.of(12L)) // offline filled
+                .thenReturn(List.of(16L)) // offline filled
                 .thenReturn(List.of(0L)); // offline skipped
 
         CompletenessScore score = calculator.recalculate("locker-1");
@@ -83,18 +83,18 @@ class CompletenessCalculatorTest {
     @Test
     void mixedOnlineOffline_splitsCorrectly() {
         when(db.query(anyString(), any(), any(), any()))
-                .thenReturn(List.of(6L))  // filled
+                .thenReturn(List.of(7L))  // filled
                 .thenReturn(List.of(0L)); // skipped
         when(db.query(anyString(), any(), any(), any(), any()))
-                .thenReturn(List.of(6L))  // online filled (all 6 online)
+                .thenReturn(List.of(7L))  // online filled (all 7 online)
                 .thenReturn(List.of(0L))  // online skipped
                 .thenReturn(List.of(0L))  // offline filled
                 .thenReturn(List.of(0L)); // offline skipped
 
         CompletenessScore score = calculator.recalculate("locker-1");
 
-        assertEquals(25, score.overall());  // 6/24 * 100
-        assertEquals(50, score.onlinePct()); // 6/12 * 100
+        assertEquals(23, score.overall());   // 7/30 * 100 (int trunc)
+        assertEquals(50, score.onlinePct()); // 7/14 * 100
         assertEquals(0, score.offlinePct());
     }
 }

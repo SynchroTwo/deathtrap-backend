@@ -50,7 +50,7 @@ public class InitLockerHandler {
         this.auditWriter = auditWriter;
     }
 
-    /** POST /locker/init — creates locker_meta and 24 asset_index rows atomically. */
+    /** POST /locker/init — creates locker_meta and 30 asset_index rows atomically. */
     @PostMapping("/init")
     public ResponseEntity<ApiResponse<InitLockerResponse>> initLocker(
             @RequestHeader("Authorization") String authHeader) {
