@@ -65,7 +65,7 @@ class MyAuditLogHandlerTest {
         when(auditQueryService.queryForParty(eq("creator-1"), eq(0), eq(50)))
                 .thenReturn(new AuditQueryResult(2L, List.of(rowWithIp("aid-1"), rowWithIp("aid-2"))));
 
-        ResponseEntity<?> response = handler.query(BEARER, 0, 50);
+        ResponseEntity<?> response = handler.query(BEARER, 0, 50, null);
 
         assertEquals(200, response.getStatusCode().value());
         Map<String, Object> body = (Map<String, Object>) ((ApiResponse<?>) response.getBody()).data();
@@ -80,7 +80,7 @@ class MyAuditLogHandlerTest {
         when(auditQueryService.queryForParty(eq("nominee-9"), eq(0), eq(50)))
                 .thenReturn(new AuditQueryResult(0L, List.of()));
 
-        handler.query(BEARER, 0, 50);
+        handler.query(BEARER, 0, 50, null);
 
         verify(auditQueryService).queryForParty(eq("nominee-9"), eq(0), eq(50));
     }
@@ -91,7 +91,7 @@ class MyAuditLogHandlerTest {
         when(auditQueryService.queryForParty(anyString(), eq(0), eq(50)))
                 .thenReturn(new AuditQueryResult(1L, List.of(rowWithIp("aid-1"))));
 
-        ResponseEntity<?> response = handler.query(BEARER, 0, 50);
+        ResponseEntity<?> response = handler.query(BEARER, 0, 50, null);
 
         Map<String, Object> body = (Map<String, Object>) ((ApiResponse<?>) response.getBody()).data();
         List<Map<String, Object>> entries = (List<Map<String, Object>>) body.get("entries");
@@ -107,7 +107,7 @@ class MyAuditLogHandlerTest {
         when(auditQueryService.queryForParty(anyString(), eq(0), eq(200)))
                 .thenReturn(new AuditQueryResult(0L, List.of()));
 
-        ResponseEntity<?> response = handler.query(BEARER, 0, 999);
+        ResponseEntity<?> response = handler.query(BEARER, 0, 999, null);
 
         Map<String, Object> body = (Map<String, Object>) ((ApiResponse<?>) response.getBody()).data();
         assertEquals(200, body.get("size"));
@@ -115,7 +115,7 @@ class MyAuditLogHandlerTest {
 
     @Test
     void missingBearer_throwsUnauthorized() {
-        AppException ex = assertThrows(AppException.class, () -> handler.query(null, 0, 50));
+        AppException ex = assertThrows(AppException.class, () -> handler.query(null, 0, 50, null));
         assertEquals(ErrorCode.AUTH_UNAUTHORIZED, ex.getErrorCode());
     }
 }

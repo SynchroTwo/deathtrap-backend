@@ -30,7 +30,7 @@ import org.springframework.web.bind.annotation.RestController;
  * history. Admin-only fields are omitted from the response (no {@code ipAddress}).
  */
 @RestController
-@RequestMapping("/audit/me")
+@RequestMapping({"/audit/me", "/audit"})
 public class MyAuditLogHandler {
 
     private static final Logger log = LoggerFactory.getLogger(MyAuditLogHandler.class);
@@ -48,12 +48,16 @@ public class MyAuditLogHandler {
         this.objectMapper = objectMapper;
     }
 
-    /** GET /audit/me — owner-scoped paginated audit entries; any valid party JWT. */
+    /** GET /audit/me (and /audit alias for the dashboard) — owner-scoped paginated
+     *  audit entries; any valid party JWT. {@code limit} is accepted as an alias
+     *  for {@code size} so the FE's dashboard call ({@code ?limit=10}) works
+     *  unchanged (D008 fix). */
     @GetMapping
     public ResponseEntity<ApiResponse<Map<String, Object>>> query(
             @RequestHeader("Authorization") String authHeader,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "50") int size) {
+            @RequestParam(defaultValue = "50") int size,
+            @RequestParam(required = false) Integer limit) {
 
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             throw AppException.unauthorized();
@@ -61,7 +65,7 @@ public class MyAuditLogHandler {
         JwtPayload jwt = jwtService.validateToken(authHeader.substring(7));
         String partyId = jwt.sub();
 
-        int effectiveSize = Math.min(size, 200);
+        int effectiveSize = Math.min(limit != null ? limit : size, 200);
         AuditQueryResult result = auditQueryService.queryForParty(partyId, page, effectiveSize);
 
         List<Map<String, Object>> entries = new ArrayList<>();
