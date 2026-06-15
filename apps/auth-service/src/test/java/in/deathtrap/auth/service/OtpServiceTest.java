@@ -18,6 +18,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -130,6 +131,27 @@ class OtpServiceTest {
                 () -> otpService.verify("party-1", "000000", OtpChannel.SMS, OtpPurpose.LOGIN));
 
         assertEquals(ErrorCode.AUTH_OTP_LOCKED, ex.getErrorCode());
+    }
+
+    @Test
+    void verify_devBypass123123_inStaging_marksVerified() throws Exception {
+        ReflectionTestUtils.setField(otpService, "environment", "staging");
+        stubVerifyQuery(sha256Hex("482931"), 0, null, Instant.now().plusSeconds(600));
+
+        otpService.verify("party-1", "123123", OtpChannel.SMS, OtpPurpose.LOGIN);
+
+        verify(dbClient).execute(anyString(), any());
+    }
+
+    @Test
+    void verify_devBypass123123_inProduction_stillFails() throws Exception {
+        ReflectionTestUtils.setField(otpService, "environment", "production");
+        stubVerifyQuery(sha256Hex("482931"), 0, null, Instant.now().plusSeconds(600));
+
+        AppException ex = assertThrows(AppException.class,
+                () -> otpService.verify("party-1", "123123", OtpChannel.SMS, OtpPurpose.LOGIN));
+
+        assertEquals(ErrorCode.AUTH_OTP_INVALID, ex.getErrorCode());
     }
 
     /**

@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -181,6 +182,61 @@ class AuthServiceIntegrationTest extends IntegrationTestBase {
             assertEquals(in.deathtrap.common.errors.ErrorCode.AUTH_REGISTRATION_DUPLICATE,
                     ex.getErrorCode());
         }
+    }
+
+    @Test
+    void verifyMobile_devBypass123123_inStaging_marksVerified() {
+        String mobile = "+910000000003";
+        String storedOtp = "555555";
+        String hash = Sha256Util.hashHex(storedOtp);
+        Instant expiry = Instant.now().plusSeconds(600);
+        Instant now = Instant.now();
+
+        jdbc.update(
+                "INSERT INTO otp_log (otp_id, party_id, party_type, channel, purpose, otp_hash, " +
+                "attempts, verified, expires_at, created_at) " +
+                "VALUES (?, ?, 'creator'::party_type_enum, 'sms'::otp_channel_enum, " +
+                "'login'::otp_purpose_enum, ?, 0, false, ?, ?)",
+                "OTP-BYPASS-SMS", mobile, hash, expiry, now);
+
+        var handler = new VerifyMobileOtpHandler(db, JWT, AUDIT);
+        ReflectionTestUtils.setField(handler, "environment", "staging");
+
+        ResponseEntity<?> resp = handler.verifyMobile(
+                new VerifyMobileOtpRequest(mobile, "123123", OtpPurpose.LOGIN, null));
+
+        assertEquals(200, resp.getStatusCode().value());
+        Boolean verified = jdbc.queryForObject(
+                "SELECT verified FROM otp_log WHERE otp_id = 'OTP-BYPASS-SMS'", Boolean.class);
+        assertTrue(verified, "Dev bypass should mark row verified without matching hash");
+    }
+
+    @Test
+    void verifyEmail_devBypass123123_inStaging_marksVerified() {
+        String mobile = "+910000000004";
+        String email = "bypass@example.com";
+        String storedOtp = "777777";
+        String hash = Sha256Util.hashHex(storedOtp);
+        Instant expiry = Instant.now().plusSeconds(600);
+        Instant now = Instant.now();
+
+        jdbc.update(
+                "INSERT INTO otp_log (otp_id, party_id, party_type, channel, purpose, otp_hash, " +
+                "attempts, verified, expires_at, created_at) " +
+                "VALUES (?, ?, 'creator'::party_type_enum, 'email'::otp_channel_enum, " +
+                "'registration'::otp_purpose_enum, ?, 0, false, ?, ?)",
+                "OTP-BYPASS-EMAIL", email, hash, expiry, now);
+
+        var handler = new VerifyEmailOtpHandler(db, JWT, AUDIT);
+        ReflectionTestUtils.setField(handler, "environment", "staging");
+
+        ResponseEntity<?> resp = handler.verifyEmail(
+                new VerifyEmailOtpRequest(email, "123123", OtpPurpose.REGISTRATION, mobile));
+
+        assertEquals(200, resp.getStatusCode().value());
+        Boolean verified = jdbc.queryForObject(
+                "SELECT verified FROM otp_log WHERE otp_id = 'OTP-BYPASS-EMAIL'", Boolean.class);
+        assertTrue(verified, "Dev bypass should mark row verified without matching hash");
     }
 
     private RegisterCreatorRequest validRegisterRequest(String mobile, String email) {

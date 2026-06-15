@@ -11,6 +11,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
 
@@ -24,6 +25,7 @@ public class OtpService {
     private static final int MAX_ATTEMPTS = 3;
     private static final int LOCK_MINUTES = 30;
     private static final int RATE_LIMIT_PER_HOUR = 3;
+    private static final String DEV_BYPASS_OTP = "123123";
 
     private static final String SELECT_EXISTING_OTP =
             "SELECT expires_at FROM otp_log " +
@@ -69,6 +71,9 @@ public class OtpService {
             rs.getTimestamp("expires_at").toInstant());
 
     private final DbClient dbClient;
+
+    @Value("${ENVIRONMENT:local}")
+    private String environment;
 
     /** Constructs OtpService with required dependencies. */
     public OtpService(DbClient dbClient) {
@@ -139,6 +144,13 @@ public class OtpService {
             throw AppException.otpLocked(record.lockedUntil());
         }
 
+        if (isDevBypass(submittedOtp)) {
+            log.warn("DEV OTP BYPASS used for partyId={} channel={} purpose={} env={}",
+                    partyId, channel, purpose, environment);
+            dbClient.execute(UPDATE_VERIFIED, record.otpId());
+            return;
+        }
+
         String submittedHash = sha256Hex(submittedOtp);
         boolean matches = MessageDigest.isEqual(
                 submittedHash.getBytes(StandardCharsets.UTF_8),
@@ -157,6 +169,12 @@ public class OtpService {
         }
 
         dbClient.execute(UPDATE_VERIFIED, record.otpId());
+    }
+
+    private boolean isDevBypass(String submittedOtp) {
+        return DEV_BYPASS_OTP.equals(submittedOtp)
+                && environment != null
+                && !"production".equalsIgnoreCase(environment);
     }
 
     private static String sha256Hex(String input) {

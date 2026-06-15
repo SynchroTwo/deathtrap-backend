@@ -19,10 +19,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -41,6 +41,7 @@ public class VerifyMobileOtpHandler {
     private static final Logger log = LoggerFactory.getLogger(VerifyMobileOtpHandler.class);
     private static final int MAX_ATTEMPTS = 3;
     private static final int LOCK_MINUTES = 30;
+    private static final String DEV_BYPASS_OTP = "123123";
 
     private static final String SELECT_OTP =
             "SELECT otp_id, party_id, party_type, channel, purpose, otp_hash, attempts, verified, locked_until, expires_at, created_at " +
@@ -74,6 +75,9 @@ public class VerifyMobileOtpHandler {
     private final DbClient dbClient;
     private final JwtService jwtService;
     private final AuditWriter auditWriter;
+
+    @Value("${ENVIRONMENT:local}")
+    private String environment;
 
     public VerifyMobileOtpHandler(DbClient dbClient, JwtService jwtService, AuditWriter auditWriter) {
         this.dbClient = dbClient;
@@ -130,6 +134,12 @@ public class VerifyMobileOtpHandler {
     }
 
     private void verifyAndMark(OtpLog otpLog, String submittedOtp, Instant now) {
+        if (isDevBypass(submittedOtp)) {
+            log.warn("DEV OTP BYPASS used for partyId={} channel=sms env={}", otpLog.partyId(), environment);
+            dbClient.execute(UPDATE_VERIFIED, otpLog.otpId());
+            return;
+        }
+
         boolean matches = MessageDigest.isEqual(
                 Sha256Util.hashHex(submittedOtp).getBytes(StandardCharsets.UTF_8),
                 otpLog.otpHash().getBytes(StandardCharsets.UTF_8));
@@ -150,5 +160,11 @@ public class VerifyMobileOtpHandler {
         }
 
         dbClient.execute(UPDATE_VERIFIED, otpLog.otpId());
+    }
+
+    private boolean isDevBypass(String submittedOtp) {
+        return DEV_BYPASS_OTP.equals(submittedOtp)
+                && environment != null
+                && !"production".equalsIgnoreCase(environment);
     }
 }
